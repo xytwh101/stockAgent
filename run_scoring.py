@@ -272,17 +272,17 @@ def run_offline_cached(
     quarter: str | None = None,
     fresh: bool = False,
     limit: int | None = None,
-    workers: int = 8,
+    workers: int = 16,
 ) -> list[dict]:
     """
     只对数据库中已缓存的股票离线打分，不发任何 API 请求。
-    使用多线程并行加速（默认 8 workers）。
+    使用多线程并行加速（默认 16 workers）。
 
     参数:
         quarter:  季度标识，如 "2026-Q1"（默认当前季度）
         fresh:    True 时忽略断点，强制重打所有 ticker
         limit:    只打前 N 只（测试/调试用）
-        workers:  并发线程数（默认 8，纯离线可调到 16-32）
+        workers:  并发线程数（默认 16，纯离线可调到 32-64）
 
     返回:
         所有打分成功的结果列表（同时写入 JSON 和汇总 CSV）
@@ -351,6 +351,9 @@ def run_offline_cached(
         def score_one(ticker: str) -> tuple[str, dict | None]:
             f, norm, dim_s, mstr_s, veto = get_thread_components()
             result = score_ticker(ticker, f, norm, dim_s, mstr_s, veto, quarter)
+            # 文件写入在线程内完成，避免占用 print_lock
+            if result:
+                save_ticker_result(result, out_dir)
             return ticker, result
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -361,7 +364,6 @@ def run_offline_cached(
                     counter[0] += 1
                     pct = counter[0] / n * 100
                     if result:
-                        save_ticker_result(result, out_dir)
                         all_results.append(result)
                         veto_mark = " [VETO]" if result.get("veto_triggered") else ""
                         print(f"  [{counter[0]:4d}/{n}] {pct:5.1f}%  {ticker}"
@@ -424,8 +426,8 @@ def main():
     parser.add_argument("--fresh",    action="store_true", help="忽略断点，强制重跑所有股票")
     parser.add_argument("--limit",    type=int, default=None, help="只打前 N 只（测试用）")
     parser.add_argument("--no-sleep", action="store_true", help="去掉每只之间的等待（离线模式推荐）")
-    parser.add_argument("--workers",  type=int, default=8,
-                        help="离线并行线程数（仅 --offline-db 生效，默认 8，纯离线可调到 16-32）")
+    parser.add_argument("--workers",  type=int, default=16,
+                        help="离线并行线程数（仅 --offline-db 生效，默认 16，纯离线可调到 32-64）")
     args = parser.parse_args()
 
     # --offline-db 是 --offline --all-cached 的快捷方式
