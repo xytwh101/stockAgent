@@ -250,20 +250,22 @@ def write_summary_csv(results: list[dict], out_dir: str):
 
 def get_all_cached_tickers(fetcher: DataFetcher) -> list[str]:
     """返回 SQLite 缓存中出现过的所有 ticker（去重、排序）"""
-    rows = fetcher.conn.execute("SELECT DISTINCT cache_key FROM cache").fetchall()
+    # 让 SQL 提取 ticker 部分，减少传输量
+    rows = fetcher.conn.execute(
+        "SELECT DISTINCT substr(cache_key, instr(cache_key, ':') + 1) FROM cache"
+    ).fetchall()
     tickers = set()
-    for (key,) in rows:
-        parts = key.split(":")
-        if len(parts) >= 2 and parts[1] not in ("", "all"):
-            sym = parts[1].upper()
-            if sym.isalpha() and len(sym) <= 5:
-                tickers.add(sym)
+    for (sym,) in rows:
+        sym = sym.upper()
+        if sym and sym not in ("ALL", "") and sym.isalpha() and len(sym) <= 5:
+            tickers.add(sym)
     return sorted(tickers)
 
 
 def apply_offline_mode(fetcher: DataFetcher):
-    """离线模式：屏蔽所有 FMP API 请求，仅读缓存"""
+    """离线模式：屏蔽所有 FMP API 请求，仅读缓存，并切换为顺序读取（避免多线程锁竞争）"""
     fetcher._fmp_request = lambda *a: None
+    fetcher._offline = True
 
 
 def run_offline_cached(
