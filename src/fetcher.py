@@ -57,17 +57,20 @@ class DataFetcher:
         # HTTP 连接池（keep-alive 复用连接）
         self._session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(
-            pool_connections=20,
-            pool_maxsize=20,
+            pool_connections=40,
+            pool_maxsize=40,
             max_retries=0,  # 我们自己管理重试
         )
         self._session.mount("https://", adapter)
 
         self._db_lock = __import__('threading').Lock()
+        self._dirty_count = 0       # 未 commit 的写入计数
+        self._last_commit = time.time()
         db_path = CACHE_CONFIG["db_path"]
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.execute("PRAGMA journal_mode=WAL")  # 并发读写性能
+        self.conn.execute("PRAGMA journal_mode=WAL")       # 并发读写性能
+        self.conn.execute("PRAGMA synchronous=NORMAL")     # 降低 fsync 频率
         self._init_db()
 
     # ─────────────────────────────────────────────
@@ -656,7 +659,7 @@ class DataFetcher:
         }
 
         result = {"ticker": ticker}
-        with ThreadPoolExecutor(max_workers=10) as pool:
+        with ThreadPoolExecutor(max_workers=19) as pool:
             futures = {pool.submit(fn): key for key, fn in tasks.items()}
             for future in as_completed(futures):
                 key = futures[future]
@@ -761,7 +764,7 @@ class DataFetcher:
         for attempt in range(self.max_retries):
             try:
                 self._rate_limit_wait()
-                resp = self._session.get(url, params=req_params, timeout=self.timeout)
+                resp = self._session.get(url, params=req_params, timeout=(5, self.timeout))
 
                 if resp.status_code == 429:
                     wait = self.retry_backoff * (2 ** attempt)
@@ -817,7 +820,20 @@ class DataFetcher:
                 "INSERT OR REPLACE INTO cache (cache_key, data_json, fetched_at, ttl_days) VALUES (?, ?, ?, ?)",
                 (cache_key, json.dumps(data, ensure_ascii=False), now, ttl_days)
             )
-            self.conn.commit()
+            self._dirty_count += 1
+            # 批量 commit：每 20 次写入或每 2 秒刷一次盘
+            if self._dirty_count >= 20 or (time.time() - self._last_commit) > 2:
+                self.conn.commit()
+                self._dirty_count = 0
+                self._last_commit = time.time()
+
+    def flush_cache(self):
+        """强制刷盘，确保所有写入持久化"""
+        with self._db_lock:
+            if self._dirty_count > 0:
+                self.conn.commit()
+                self._dirty_count = 0
+                self._last_commit = time.time()
 
     # ─────────────────────────────────────────────
     # 断点续跑
@@ -851,6 +867,7 @@ class DataFetcher:
         return {"total": total, "done": done, "remaining": total - done}
 
     def close(self):
+        self.flush_cache()
         self._session.close()
         self.conn.close()
 

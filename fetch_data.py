@@ -228,11 +228,18 @@ def fetch_ticker(
         return len(missing), skipped
 
     before = fetcher.api_calls
-    for ep_name, method_name, kwargs in missing:
+
+    def _fetch_one_ep(item):
+        ep_name, method_name, kwargs = item
         try:
             fetcher.fetch_endpoint(sym, method_name, kwargs)
         except Exception as e:
             print(f"    [错误] {ep_name}: {e}")
+
+    # 单只 ticker 内部也并发拉取所有缺失端点
+    with ThreadPoolExecutor(max_workers=len(missing)) as pool:
+        list(pool.map(_fetch_one_ep, missing))
+
     made = fetcher.api_calls - before
     return made, skipped
 
@@ -302,7 +309,7 @@ def main():
                         help="core=打分必需8端点（默认）  full=全量19端点")
     parser.add_argument("--dry-run", action="store_true", help="只估算调用量，不实际拉取")
     parser.add_argument("--sleep",   type=float, default=0.1, help="每只股票间隔秒数（默认0.1）")
-    parser.add_argument("--workers", type=int, default=4, help="并发拉取股票数（默认4）")
+    parser.add_argument("--workers", type=int, default=8, help="并发拉取股票数（默认8）")
     args = parser.parse_args()
 
     endpoints = CORE_ENDPOINTS if args.mode == "core" else FULL_ENDPOINTS
