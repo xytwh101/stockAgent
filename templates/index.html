@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>投资大师选股系统</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:      #0d1117;
+  --bg2:     #161b22;
+  --bg3:     #1c2128;
+  --border:  #30363d;
+  --txt:     #e6edf3;
+  --txt2:    #8b949e;
+  --blue:    #58a6ff;
+  --green:   #3fb950;
+  --red:     #f85149;
+  --yellow:  #d29922;
+  --purple:  #bc8cff;
+}
+html.light {
+  --bg:      #f6f8fa;
+  --bg2:     #ffffff;
+  --bg3:     #eaeef2;
+  --border:  #d0d7de;
+  --txt:     #1f2328;
+  --txt2:    #57606a;
+  --blue:    #0969da;
+  --green:   #1a7f37;
+  --red:     #cf222e;
+  --yellow:  #9a6700;
+  --purple:  #8250df;
+}
+html.light .tbl tbody tr:hover td { background: rgba(0,0,0,.04) !important; }
+html.light .veto-box { background: rgba(207,34,46,.06); }
+html.light .pass-box { background: rgba(26,127,55,.06); }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--txt); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+/* ── Navbar ── */
+.nav { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.nav-brand { font-weight: 700; font-size: 1rem; white-space: nowrap; }
+.nav-brand i { color: var(--blue); margin-right: 6px; }
+.quarter-sel { background: var(--bg); border: 1px solid var(--border); color: var(--txt); border-radius: 6px; padding: 5px 10px; font-size: 0.82rem; cursor: pointer; }
+
+/* ── Layout ── */
+.layout { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar { width: 290px; min-width: 290px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-top { padding: 12px; border-bottom: 1px solid var(--border); }
+.search { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--txt); border-radius: 6px; padding: 7px 12px; font-size: 0.82rem; outline: none; }
+.search:focus { border-color: var(--blue); }
+.search::placeholder { color: var(--txt2); }
+.sort-bar { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.sort-btn { background: var(--bg); border: 1px solid var(--border); color: var(--txt2); border-radius: 4px; padding: 3px 10px; font-size: 0.72rem; cursor: pointer; transition: all .15s; }
+.sort-btn.active, .sort-btn:hover { border-color: var(--blue); color: var(--blue); }
+.stock-count { font-size: 0.72rem; color: var(--txt2); margin-left: auto; }
+
+.stock-list { flex: 1; overflow-y: auto; padding: 6px; }
+.stock-item { padding: 9px 11px; border-radius: 7px; cursor: pointer; margin-bottom: 3px; border: 1px solid transparent; transition: all .12s; }
+.stock-item:hover { background: var(--bg3); }
+.stock-item.active { background: var(--bg3); border-color: var(--blue); }
+.stock-ticker { font-weight: 700; font-size: 0.9rem; color: var(--blue); }
+.stock-name-sm { font-size: 0.72rem; color: var(--txt2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.veto-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--red); margin-left: 5px; vertical-align: middle; }
+.score-mini { font-size: 0.88rem; font-weight: 700; }
+.mini-bar { height: 3px; border-radius: 2px; margin-top: 5px; background: var(--bg); overflow: hidden; }
+.mini-bar-fill { height: 100%; border-radius: 2px; transition: width .4s; }
+
+/* ── Main ── */
+.main { flex: 1; overflow-y: auto; padding: 20px 24px; }
+.welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; opacity: .5; gap: 12px; }
+.welcome i { font-size: 3.5rem; color: var(--blue); }
+
+/* ── Cards ── */
+.card { background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.card-hd { padding: 11px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 0.88rem; display: flex; align-items: center; gap: 8px; }
+.card-hd i { color: var(--blue); }
+.card-bd { padding: 14px 16px; }
+
+/* ── Score ring ── */
+.score-ring { width: 70px; height: 70px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-direction: column; font-size: 1.4rem; font-weight: 800; border: 3px solid; }
+
+/* ── Master cards ── */
+.master-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.master-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; text-align: center; }
+.master-score { font-size: 1.7rem; font-weight: 800; }
+.master-name { font-size: 0.73rem; color: var(--txt2); margin-top: 3px; }
+
+/* ── Stat pills ── */
+.pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.pill { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 9px; font-size: 0.75rem; color: var(--txt2); }
+.pill span { color: var(--txt); font-weight: 600; }
+
+/* ── Veto ── */
+.veto-box { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.3); border-radius: 8px; padding: 10px 14px; }
+.pass-box { background: rgba(63,185,80,.08); border: 1px solid rgba(63,185,80,.3); border-radius: 8px; padding: 10px 14px; }
+
+/* ── Score breakdown ── */
+.dim-row { border-bottom: 1px solid var(--border); padding: 9px 0; }
+.dim-row:last-child { border-bottom: none; }
+.dim-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+.dim-bar-wrap { width: 90px; height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.dim-bar-fill { height: 100%; border-radius: 3px; }
+.sub-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 0.78rem; }
+.sub-bar { width: 50px; height: 3px; background: var(--bg); border-radius: 2px; overflow: hidden; display: inline-block; vertical-align: middle; margin: 0 6px; }
+.sub-bar-fill { height: 100%; border-radius: 2px; }
+
+/* ── Tables ── */
+.tbl { width: 100%; font-size: 0.82rem; border-collapse: collapse; }
+.tbl th { color: var(--txt2); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+.tbl td { padding: 6px 10px; color: var(--txt); border-bottom: 1px solid rgba(48,54,61,.5); }
+.tbl tbody tr:hover td { background: rgba(255,255,255,.025); }
+.tbl tbody tr:last-child td { border-bottom: none; }
+
+/* ── Charts ── */
+.chart-wrap { position: relative; height: 220px; }
+
+/* ── Colors ── */
+.c-green { color: var(--green); }
+.c-yellow { color: var(--yellow); }
+.c-red { color: var(--red); }
+.c-blue { color: var(--blue); }
+.c-muted { color: var(--txt2); }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Loading spinner ── */
+.spinner { display: flex; align-items: center; justify-content: center; padding: 40px; color: var(--txt2); gap: 10px; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+
+<!-- Navbar -->
+<div class="nav">
+  <div class="nav-brand"><i class="bi bi-graph-up-arrow"></i>投资大师选股系统</div>
+  <div style="flex:1"></div>
+  <select class="quarter-sel" id="quarterSel" onchange="onQuarterChange()">
+    <option>加载中…</option>
+  </select>
+  <button id="themeBtn" onclick="toggleTheme()"
+    style="background:var(--bg3);border:1px solid var(--border);color:var(--txt2);border-radius:6px;padding:5px 10px;font-size:0.82rem;cursor:pointer;transition:all .15s;white-space:nowrap"
+    title="切换明亮/夜间模式">🌙 夜间</button>
+</div>
+
+<!-- Body -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-top">
+      <input class="search" id="searchInput" placeholder="🔍  搜索股票代码或公司名称…" oninput="onSearch(this.value)">
+      <div class="sort-bar">
+        <button class="sort-btn active" id="btnScore" onclick="setSort('score')">得分 ↓</button>
+        <button class="sort-btn" id="btnMktcap" onclick="setSort('mktcap')">市值 ↓</button>
+        <span class="stock-count" id="stockCount">-</span>
+      </div>
+    </div>
+    <div class="stock-list" id="stockList">
+      <div class="spinner"><div class="spinner-border spinner-border-sm"></div> 加载中…</div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main" id="main">
+    <div class="welcome" id="welcome">
+      <i class="bi bi-graph-up-arrow"></i>
+      <div style="font-size:1.3rem;font-weight:600">投资大师选股系统</div>
+      <div class="c-muted" style="font-size:.88rem">从左侧点击一只股票，查看详细分析</div>
+    </div>
+    <div id="detail" style="display:none"></div>
+  </div>
+
+</div>
+
+<script>
+// ── Theme ─────────────────────────────────────────────────────
+function isLight() { return document.documentElement.classList.contains('light'); }
+function gridColor() { return isLight() ? '#d0d7de' : '#30363d'; }
+function tickColor() { return isLight() ? '#57606a' : '#8b949e'; }
+function ptLabelColor() { return isLight() ? '#1f2328' : '#e6edf3'; }
+
+function applyTheme(light) {
+  document.documentElement.classList.toggle('light', light);
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = light ? '🌞 明亮' : '🌙 夜间';
+  Chart.defaults.color = tickColor();
+  Chart.defaults.borderColor = gridColor();
+  // 若当前有股票详情，重绘图表使颜色即时生效
+  if (S.ticker) loadDetail(S.ticker);
+}
+
+function toggleTheme() {
+  const next = !isLight();
+  localStorage.setItem('theme', next ? 'light' : 'dark');
+  applyTheme(next);
+}
+
+// ── State ─────────────────────────────────────────────────────
+const S = { stocks: [], filtered: [], ticker: null, quarter: '', sort: 'score', query: '', charts: {} };
+
+// ── Helpers ───────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const scoreColor = v => v >= 7 ? 'var(--green)' : v >= 5 ? 'var(--yellow)' : 'var(--red)';
+const scoreClass = v => v >= 7 ? 'c-green' : v >= 5 ? 'c-yellow' : 'c-red';
+const fmtPct  = v => v != null ? (v * 100).toFixed(1) + '%' : null;
+const fmtBil  = v => v != null ? '$' + (v / 1e9).toFixed(1) + 'B' : null;
+const fmtNum  = (v, d=2) => v != null ? v.toFixed(d) : null;
+const NA      = '<span class="c-muted">N/A</span>';
+const disp    = (v, fn) => { const r = fn(v); return r != null ? r : NA; };
+
+const MASTERS = [
+  { key: 'buffett', name: '🏦 巴菲特', color: 'var(--blue)',   w: [.40,.20,.10,.20,.10] },
+  { key: 'munger',  name: '📚 芒格',   color: 'var(--green)',  w: [.35,.20,.10,.30,.05] },
+  { key: 'duan',    name: '🎯 段永平', color: 'var(--purple)', w: [.35,.15,.25,.25,.00] },
+  { key: 'lynch',   name: '📈 彼得林奇', color: 'var(--yellow)', w: [.20,.15,.40,.10,.15] },
+];
+const DIMS = [
+  { key: 'business_quality', name: '生意质量', icon: '🏆', desc: '护城河 · 毛利率 · ROIC' },
+  { key: 'financial_health', name: '财务健康', icon: '💪', desc: '流动性 · 偿债 · 现金流' },
+  { key: 'growth',           name: '成长性',   icon: '🚀', desc: '营收 · 利润 · EPS增速' },
+  { key: 'management',       name: '管理层',   icon: '👔', desc: 'ROIC · 回购 · 资本配置' },
+  { key: 'valuation',        name: '估值',     icon: '💰', desc: 'PEG · PE · EV/EBITDA' },
+];
+
+// ── Init ──────────────────────────────────────────────────────
+async function init() {
+  const quarters = await fetch('/api/quarters').then(r => r.json());
+  const sel = $('quarterSel');
+  sel.innerHTML = quarters.map(q => `<option value="${q}">${q}</option>`).join('') || '<option>暂无数据</option>';
+  S.quarter = quarters[0] || '';
+  if (S.quarter) loadStocks();
+}
+
+function onQuarterChange() {
+  S.quarter = $('quarterSel').value;
+  S.ticker = null;
+  $('welcome').style.display = '';
+  $('detail').style.display = 'none';
+  loadStocks();
+}
+
+// ── Stock list ─────────────────────────────────────────────────
+async function loadStocks() {
+  $('stockList').innerHTML = '<div class="spinner"><div class="spinner-border spinner-border-sm"></div> 加载中…</div>';
+  S.stocks = await fetch(`/api/stocks?quarter=${S.quarter}`).then(r => r.json());
+  applyFilter();
+}
+
+function onSearch(q) { S.query = q.toLowerCase(); applyFilter(); }
+
+function applyFilter() {
+  S.filtered = S.query
+    ? S.stocks.filter(s => s.ticker.toLowerCase().includes(S.query) || (s.company_info?.name||'').toLowerCase().includes(S.query))
+    : [...S.stocks];
+  applySort(false);
+}
+
+function setSort(by) {
+  S.sort = by;
+  ['Score','Mktcap'].forEach(k => $('btn'+k).classList.toggle('active', k.toLowerCase() === by));
+  applySort(true);
+}
+
+function applySort(render = true) {
+  if (S.sort === 'score')  S.filtered.sort((a,b) => b.composite_score - a.composite_score);
+  if (S.sort === 'mktcap') S.filtered.sort((a,b) => (b.company_info?.market_cap||0) - (a.company_info?.market_cap||0));
+  if (render) renderList();
+  else renderList();
+}
+
+function renderList() {
+  $('stockCount').textContent = S.filtered.length + ' 只';
+  if (!S.filtered.length) {
+    $('stockList').innerHTML = '<div class="c-muted" style="text-align:center;padding:30px;font-size:.82rem">无匹配结果</div>';
+    return;
+  }
+  $('stockList').innerHTML = S.filtered.map(s => {
+    const sc = s.composite_score || 0;
+    const active = s.ticker === S.ticker ? ' active' : '';
+    const veto = s.veto_triggered ? '<span class="veto-dot" title="触发否决"></span>' : '';
+    const mc = s.company_info?.market_cap ? '$' + (s.company_info.market_cap/1e9).toFixed(0)+'B' : '';
+    return `<div class="stock-item${active}" onclick="loadDetail('${s.ticker}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="overflow:hidden">
+          <span class="stock-ticker">${s.ticker}</span>${veto}
+          <div class="stock-name-sm">${(s.company_info?.name||'').slice(0,30)}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:8px">
+          <div class="score-mini" style="color:${scoreColor(sc)}">${sc.toFixed(2)}</div>
+          <div style="font-size:.68rem;color:var(--txt2)">${mc}</div>
+        </div>
+      </div>
+      <div class="mini-bar"><div class="mini-bar-fill" style="width:${sc*10}%;background:${scoreColor(sc)}"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ── Detail ────────────────────────────────────────────────────
+async function loadDetail(ticker) {
+  S.ticker = ticker;
+  renderList();
+  Object.values(S.charts).forEach(c => c?.destroy());
+  S.charts = {};
+  $('welcome').style.display = 'none';
+  $('detail').style.display = '';
+  $('detail').innerHTML = '<div class="spinner"><div class="spinner-border spinner-border-sm"></div> 加载详情…</div>';
+  const data = await fetch(`/api/stock/${ticker}?quarter=${S.quarter}`).then(r => r.json());
+  renderDetail(data);
+}
+
+function renderDetail(d) {
+  const ci = d.company_info || {};
+  const dims = d.dimensions || {};
+  const ms = d.master_scores || {};
+  const km = d.key_metrics || {};
+  const sc = d.composite_score || 0;
+  const fin = d.financials;
+  const breakdown = d.score_breakdown;
+
+  // ── Header ──
+  const mktcap = ci.market_cap ? '$' + (ci.market_cap/1e9).toFixed(0)+'B' : 'N/A';
+  const hdr = `
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px">
+    <div>
+      <div style="font-size:1.4rem;font-weight:700">${d.ticker}
+        <span style="font-size:.95rem;font-weight:400;color:var(--txt2);margin-left:8px">${ci.name||''}</span>
+      </div>
+      <div class="pills">
+        <span class="pill"><span>${ci.sector||'N/A'}</span></span>
+        <span class="pill">市值 <span>${mktcap}</span></span>
+        <span class="pill">PE <span>${km.pe_ratio ? km.pe_ratio.toFixed(1) : 'N/A'}</span></span>
+        <span class="pill">PB <span>${km.pb_ratio ? km.pb_ratio.toFixed(1) : 'N/A'}</span></span>
+        <span class="pill">EV/EBITDA <span>${km.ev_to_ebitda ? km.ev_to_ebitda.toFixed(1) : 'N/A'}</span></span>
+        <span class="pill">数据年数 <span>${d.years_of_data||0}年</span></span>
+      </div>
+    </div>
+    <div style="text-align:center;flex-shrink:0;margin-left:16px">
+      <div class="score-ring" style="color:${scoreColor(sc)};border-color:${scoreColor(sc)}">${sc.toFixed(1)}</div>
+      <div style="font-size:.7rem;color:var(--txt2);margin-top:4px">综合得分</div>
+    </div>
+  </div>`;
+
+  // ── Veto ──
+  const vetoHtml = d.veto_triggered
+    ? `<div class="veto-box mb-3">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <i class="bi bi-exclamation-triangle-fill" style="color:var(--red)"></i>
+          <strong style="font-size:.88rem">触发否决 — 不参与推荐排名</strong>
+        </div>
+        ${(d.veto_reasons||[]).map(r=>`<div style="font-size:.8rem;color:var(--txt2);margin-top:2px">• ${r}</div>`).join('')}
+      </div>`
+    : `<div class="pass-box mb-3">
+        <i class="bi bi-check-circle-fill c-green"></i>
+        <span style="font-size:.85rem;margin-left:8px">通过全部否决检查</span>
+      </div>`;
+
+  // ── Master cards ──
+  const masterCards = MASTERS.map(m => {
+    const s = ms[m.key] || 0;
+    return `<div class="master-card">
+      <div style="font-size:.95rem">${m.name.slice(0,2)}</div>
+      <div class="master-score" style="color:${m.color}">${s.toFixed(2)}</div>
+      <div class="master-name">${m.name.slice(2).trim()}</div>
+    </div>`;
+  }).join('');
+
+  // ── Dimension breakdown ──
+  const dimRows = DIMS.map(dim => {
+    const s = dims[dim.key] || 0;
+    const bd = breakdown?.[dim.key];
+    let subHtml = '';
+    if (bd?.components?.length) {
+      subHtml = bd.components.map(c => `
+        <div class="sub-row">
+          <span style="color:var(--txt2);flex:1">${c.name}</span>
+          <span style="color:var(--txt);min-width:60px;text-align:right">${c.display}</span>
+          <span class="sub-bar"><span class="sub-bar-fill" style="width:${c.score*10}%;background:${scoreColor(c.score)}"></span></span>
+          <span style="color:${scoreColor(c.score)};min-width:24px;text-align:right;font-weight:600">${c.score.toFixed(0)}</span>
+        </div>`).join('');
+    } else {
+      subHtml = '<div style="font-size:.78rem;color:var(--txt2);padding:6px 0">暂无详细数据</div>';
+    }
+    return `<div class="dim-row">
+      <div class="dim-header" onclick="toggleDim(this)">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span>${dim.icon}</span>
+          <strong style="font-size:.88rem">${dim.name}</strong>
+          <span style="font-size:.72rem;color:var(--txt2)">${dim.desc}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <div class="dim-bar-wrap"><div class="dim-bar-fill" style="width:${s*10}%;background:${scoreColor(s)}"></div></div>
+          <span class="score-mini ${scoreClass(s)}" style="min-width:28px;text-align:right">${s.toFixed(1)}</span>
+          <i class="bi bi-chevron-down" style="font-size:.7rem;color:var(--txt2)"></i>
+        </div>
+      </div>
+      <div style="display:none;padding:6px 0 2px 24px">${subHtml}</div>
+    </div>`;
+  }).join('');
+
+  // ── Master weight table ──
+  const dimKeys = ['business_quality','financial_health','growth','management','valuation'];
+  const wTableRows = MASTERS.map(m => {
+    const s = ms[m.key] || 0;
+    const cells = m.w.map((w, i) => {
+      const contrib = (dims[dimKeys[i]] || 0) * w;
+      return `<td>${(w*100).toFixed(0)}% <span class="c-muted" style="font-size:.72rem">(${contrib.toFixed(2)})</span></td>`;
+    }).join('');
+    return `<tr><td style="font-weight:600">${m.name}</td>${cells}
+      <td style="font-weight:700;color:${scoreColor(s)}">${s.toFixed(3)}</td></tr>`;
+  }).join('');
+
+  // ── Key metrics grid ──
+  const metrics = [
+    ['市盈率 PE (TTM)', km.pe_ratio, v => v.toFixed(1)+'x'],
+    ['市净率 PB (TTM)', km.pb_ratio, v => v.toFixed(1)+'x'],
+    ['EV/EBITDA (TTM)', km.ev_to_ebitda, v => v.toFixed(1)+'x'],
+    ['PEG (TTM)', km.peg_ratio, v => v.toFixed(2)],
+    ['ROE 5年均值', km.roe_5y_avg, v => (v*100).toFixed(1)+'%'],
+    ['ROIC 5年均值', km.roic_5y_avg, v => (v*100).toFixed(1)+'%'],
+    ['营收 CAGR 5年', km.revenue_cagr_5y, v => (v*100).toFixed(1)+'%'],
+    ['净利 CAGR 5年', km.net_income_cagr_5y, v => (v*100).toFixed(1)+'%'],
+    ['EPS CAGR 5年', km.eps_cagr_5y, v => (v*100).toFixed(1)+'%'],
+    ['FCF CAGR 3年', km.fcf_cagr_3y, v => (v*100).toFixed(1)+'%'],
+    ['毛利率稳定性 CV', km.gross_margin_cv, v => v.toFixed(3)],
+    ['FCF Yield', d.financials?.free_cash_flow?.[0] && ci.market_cap ? ((d.financials.free_cash_flow[0]/ci.market_cap)*100).toFixed(1)+'%' : null, v => v],
+  ];
+  const metricsHtml = metrics.map(([n, v, fn]) => `
+    <div style="padding:8px;background:var(--bg2);border-radius:6px">
+      <div style="font-size:.72rem;color:var(--txt2)">${n}</div>
+      <div style="font-size:.95rem;font-weight:600;margin-top:2px">${v != null ? (typeof fn === 'function' ? fn(v) : v) : NA}</div>
+    </div>`).join('');
+
+  // ── Assemble ──
+  $('detail').innerHTML = `
+  ${hdr}
+  ${vetoHtml}
+
+  <!-- Master scores -->
+  <div class="master-grid mb-3">${masterCards}</div>
+
+  <!-- Charts row 1: radar + masters bar -->
+  <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:12px;margin-bottom:12px">
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-pentagon"></i>五维雷达图</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartRadar"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-bar-chart-line"></i>大师得分对比</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartMaster"></canvas></div></div>
+    </div>
+  </div>
+
+  ${fin ? `
+  <!-- Charts row 2: revenue + margin -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-cash-stack"></i>营收 & 净利润</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartRev"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-percent"></i>毛利率 & 净利率</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartMargin"></canvas></div></div>
+    </div>
+  </div>
+  <!-- Charts row 3: returns + eps/fcf -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-arrow-up-right-circle"></i>ROE & ROIC</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartReturn"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-currency-dollar"></i>EPS & 自由现金流</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartEps"></canvas></div></div>
+    </div>
+  </div>` : ''}
+
+  <!-- Score breakdown -->
+  <div class="card mb-3">
+    <div class="card-hd"><i class="bi bi-calculator"></i>评分维度详情
+      <span class="c-muted" style="font-size:.72rem;font-weight:400">（点击展开子指标）</span>
+    </div>
+    <div class="card-bd">${dimRows}</div>
+  </div>
+
+  <!-- Weight matrix -->
+  <div class="card mb-3">
+    <div class="card-hd"><i class="bi bi-table"></i>大师权重矩阵</div>
+    <div style="overflow-x:auto">
+      <table class="tbl">
+        <thead><tr>
+          <th>大师</th><th>生意质量</th><th>财务健康</th><th>成长性</th><th>管理层</th><th>估值</th><th>得分</th>
+        </tr></thead>
+        <tbody>
+          ${wTableRows}
+          <tr style="border-top:1px solid var(--border)">
+            <td class="c-muted">默认权重</td>
+            ${[30,20,20,15,15].map(w=>`<td class="c-muted">${w}%</td>`).join('')}
+            <td style="font-weight:700;color:${scoreColor(sc)}">${sc.toFixed(3)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Key metrics grid -->
+  <div class="card mb-3">
+    <div class="card-hd"><i class="bi bi-clipboard-data"></i>关键指标</div>
+    <div class="card-bd">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${metricsHtml}</div>
+    </div>
+  </div>
+  `;
+
+  // ── Render charts ──
+  Chart.defaults.color = tickColor();
+  Chart.defaults.borderColor = gridColor();
+
+  // Radar
+  const rCtx = $('chartRadar');
+  if (rCtx) S.charts.radar = new Chart(rCtx, {
+    type: 'radar',
+    data: {
+      labels: ['生意质量','财务健康','成长性','管理层','估值'],
+      datasets: [{
+        label: '得分', pointRadius: 4,
+        data: DIMS.map(d => dims[d.key] || 0),
+        backgroundColor: 'rgba(88,166,255,.15)',
+        borderColor: 'var(--blue)',
+        pointBackgroundColor: 'var(--blue)',
+      }]
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: { r: {
+        min: 0, max: 10,
+        ticks: { stepSize: 2, backdropColor: 'transparent', font: { size: 9 } },
+        grid: { color: gridColor() },
+        angleLines: { color: gridColor() },
+        pointLabels: { color: ptLabelColor(), font: { size: 11 } },
+      }}
+    }
+  });
+
+  // Master bar
+  const mCtx = $('chartMaster');
+  if (mCtx) S.charts.master = new Chart(mCtx, {
+    type: 'bar',
+    data: {
+      labels: MASTERS.map(m => m.name),
+      datasets: [{
+        label: '大师得分',
+        data: MASTERS.map(m => ms[m.key] || 0),
+        backgroundColor: MASTERS.map(m => m.color.replace('var(--','').replace(')','') === 'blue' ? 'rgba(88,166,255,.7)' : m.color.replace('var(--','rgba(').replace(')',',0.7)').replace('blue','88,166,255').replace('green','63,185,80').replace('yellow','210,153,34').replace('purple','188,140,255')),
+        borderRadius: 5,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+        y: { min: 0, max: 10, grid: { color: gridColor() }, ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+
+  if (!fin) return;
+  const years = [...(fin.years || [])].reverse();
+
+  // Revenue & Net Income
+  const revCtx = $('chartRev');
+  if (revCtx) S.charts.rev = new Chart(revCtx, {
+    type: 'bar',
+    data: {
+      labels: years,
+      datasets: [
+        { label: '营收 ($B)', data: [...fin.revenue].reverse().map(v=>v?v/1e9:null), backgroundColor: 'rgba(88,166,255,.6)', borderRadius: 3 },
+        { label: '净利润 ($B)', data: [...fin.net_income].reverse().map(v=>v?v/1e9:null), backgroundColor: 'rgba(63,185,80,.6)', borderRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 10 } } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+        y: { grid: { color: gridColor() }, ticks: { font: { size: 9 }, callback: v => '$'+v.toFixed(0)+'B' } }
+      }
+    }
+  });
+
+  // Margins
+  const mgCtx = $('chartMargin');
+  if (mgCtx) S.charts.margin = new Chart(mgCtx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        { label: '毛利率', data: [...fin.gross_margin].reverse().map(v=>v!=null?+(v*100).toFixed(1):null), borderColor: 'var(--blue)', backgroundColor: 'rgba(88,166,255,.08)', fill: true, tension: .3, pointRadius: 3 },
+        { label: '净利率', data: [...fin.net_margin].reverse().map(v=>v!=null?+(v*100).toFixed(1):null), borderColor: 'var(--green)', backgroundColor: 'rgba(63,185,80,.08)', fill: true, tension: .3, pointRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 10 } } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+        y: { grid: { color: gridColor() }, ticks: { font: { size: 9 }, callback: v => v+'%' } }
+      }
+    }
+  });
+
+  // ROE & ROIC
+  const rtCtx = $('chartReturn');
+  if (rtCtx) S.charts.ret = new Chart(rtCtx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        { label: 'ROE', data: [...fin.roe].reverse().map(v=>v!=null?+(v*100).toFixed(1):null), borderColor: 'var(--purple)', backgroundColor: 'rgba(188,140,255,.08)', fill: true, tension: .3, pointRadius: 3 },
+        { label: 'ROIC', data: [...fin.roic].reverse().map(v=>v!=null?+(v*100).toFixed(1):null), borderColor: 'var(--yellow)', backgroundColor: 'rgba(210,153,34,.08)', fill: true, tension: .3, pointRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 10 } } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+        y: { grid: { color: gridColor() }, ticks: { font: { size: 9 }, callback: v => v+'%' } }
+      }
+    }
+  });
+
+  // EPS & FCF
+  const epsCtx = $('chartEps');
+  if (epsCtx) S.charts.eps = new Chart(epsCtx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        { label: 'EPS ($)', data: [...fin.eps].reverse(), borderColor: 'var(--green)', tension: .3, pointRadius: 3, yAxisID: 'y1' },
+        { label: 'FCF ($B)', data: [...fin.free_cash_flow].reverse().map(v=>v?+(v/1e9).toFixed(1):null), borderColor: 'var(--red)', tension: .3, pointRadius: 3, yAxisID: 'y2' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 10 } } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+        y1: { position: 'left',  grid: { color: gridColor() }, ticks: { font: { size: 9 }, callback: v => '$'+v } },
+        y2: { position: 'right', grid: { display: false }, ticks: { font: { size: 9 }, callback: v => '$'+v+'B' } },
+      }
+    }
+  });
+}
+
+function toggleDim(el) {
+  const panel = el.nextElementSibling;
+  const icon = el.querySelector('.bi-chevron-down, .bi-chevron-up');
+  if (panel.style.display === 'none') {
+    panel.style.display = '';
+    if (icon) { icon.classList.remove('bi-chevron-down'); icon.classList.add('bi-chevron-up'); }
+  } else {
+    panel.style.display = 'none';
+    if (icon) { icon.classList.remove('bi-chevron-up'); icon.classList.add('bi-chevron-down'); }
+  }
+}
+
+// 从 localStorage 恢复主题（默认夜间）
+applyTheme(localStorage.getItem('theme') === 'light');
+init();
+</script>
+</body>
+</html>

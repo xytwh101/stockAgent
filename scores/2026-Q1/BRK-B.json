@@ -1,0 +1,47 @@
+{
+  "ticker": "BRK-B",
+  "scored_at": "2026-03-13T22:00:20.588859",
+  "quarter": "2026-Q1",
+  "composite_score": 3.55,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[巴菲特] ROE 5年均值 8.8% < 12%",
+    "[芒格] 过去5年ROE > 10% 不足 3 年",
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 4.0,
+    "financial_health": 9.0,
+    "growth": 2.0,
+    "management": 1.0,
+    "valuation": 0.0
+  },
+  "master_scores": {
+    "buffett": 3.8,
+    "munger": 3.7,
+    "duan": 3.5,
+    "lynch": 3.05
+  },
+  "company_info": {
+    "name": "Berkshire Hathaway Inc.",
+    "sector": "Financial Services",
+    "industry": "Insurance - Diversified",
+    "market_cap": 1061948069575.0
+  },
+  "key_metrics": {
+    "pe_ratio": null,
+    "pb_ratio": null,
+    "peg_ratio": null,
+    "ev_to_ebitda": null,
+    "roe_5y_avg": 0.08843956355337573,
+    "roic_5y_avg": 0.0738608279024249,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": 0.04592579078824954,
+    "gross_margin_cv": null
+  },
+  "data_quality_flags": [
+    "missing_valuation_ttm"
+  ],
+  "years_of_data": 5
+}

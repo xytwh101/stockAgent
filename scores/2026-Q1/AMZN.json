@@ -1,0 +1,44 @@
+{
+  "ticker": "AMZN",
+  "scored_at": "2026-03-13T21:58:22.234406",
+  "quarter": "2026-Q1",
+  "composite_score": 3.7317,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "长期负债/FCF > 10.0",
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 4.8,
+    "financial_health": 7.3333,
+    "growth": 0.0,
+    "management": 3.0,
+    "valuation": 2.5
+  },
+  "master_scores": {
+    "buffett": 4.2367,
+    "munger": 4.1717,
+    "duan": 3.53,
+    "lynch": 2.735
+  },
+  "company_info": {
+    "name": "Amazon.com, Inc.",
+    "sector": "Consumer Cyclical",
+    "industry": "Specialty Retail",
+    "market_cap": 2247677784177.0
+  },
+  "key_metrics": {
+    "pe_ratio": 28.856529033088705,
+    "pb_ratio": 5.452389792368604,
+    "peg_ratio": 26.006946791071172,
+    "ev_to_ebitda": 13.982545734312723,
+    "roe_5y_avg": 0.13205112988230958,
+    "roic_5y_avg": 0.09011641819722956,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": null,
+    "gross_margin_cv": 0.051060442024859716
+  },
+  "data_quality_flags": [],
+  "years_of_data": 4
+}

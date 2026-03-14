@@ -1,0 +1,43 @@
+{
+  "ticker": "META",
+  "scored_at": "2026-03-13T21:59:20.316117",
+  "quarter": "2026-Q1",
+  "composite_score": 7.7083,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 8.0,
+    "financial_health": 8.6667,
+    "growth": 10.0,
+    "management": 8.0,
+    "valuation": 2.5
+  },
+  "master_scores": {
+    "buffett": 7.7833,
+    "munger": 8.0583,
+    "duan": 8.6,
+    "lynch": 8.075
+  },
+  "company_info": {
+    "name": "Meta Platforms, Inc.",
+    "sector": "Communication Services",
+    "industry": "Internet Content & Information",
+    "market_cap": 1577372695738.0
+  },
+  "key_metrics": {
+    "pe_ratio": 26.082538373747063,
+    "pb_ratio": 7.258683156649465,
+    "peg_ratio": 7.460894001478031,
+    "ev_to_ebitda": 15.336405049167643,
+    "roe_5y_avg": 0.26488712655854635,
+    "roic_5y_avg": 0.206894946682993,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": 0.33708391235753266,
+    "gross_margin_cv": 0.017698577091263726
+  },
+  "data_quality_flags": [],
+  "years_of_data": 5
+}

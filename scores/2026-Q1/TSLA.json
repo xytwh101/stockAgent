@@ -1,0 +1,46 @@
+{
+  "ticker": "TSLA",
+  "scored_at": "2026-03-13T21:59:49.103725",
+  "quarter": "2026-Q1",
+  "composite_score": 3.9667,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[巴菲特] 毛利率 18.0% < 25%",
+    "[芒格] 过去5年ROE > 10% 不足 3 年",
+    "[林奇] EPS连续增长不足3年",
+    "[林奇] PE=339.4 过高但EPS增速不足20%"
+  ],
+  "dimensions": {
+    "business_quality": 4.0,
+    "financial_health": 9.3333,
+    "growth": 0.0,
+    "management": 6.0,
+    "valuation": 0.0
+  },
+  "master_scores": {
+    "buffett": 4.6667,
+    "munger": 5.0667,
+    "duan": 4.3,
+    "lynch": 2.8
+  },
+  "company_info": {
+    "name": "Tesla, Inc.",
+    "sector": "Consumer Cyclical",
+    "industry": "Auto - Manufacturers",
+    "market_cap": 1492942964397.0
+  },
+  "key_metrics": {
+    "pe_ratio": 339.398495914602,
+    "pb_ratio": 15.67719655575441,
+    "peg_ratio": -12.100294202172767,
+    "ev_to_ebitda": 126.4324731600646,
+    "roe_5y_avg": 0.16623079072544672,
+    "roic_5y_avg": 0.14467315669899156,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": -0.062633415093298,
+    "gross_margin_cv": 0.16419937060005665
+  },
+  "data_quality_flags": [],
+  "years_of_data": 5
+}

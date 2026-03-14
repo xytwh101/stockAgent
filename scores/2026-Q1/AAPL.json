@@ -1,0 +1,43 @@
+{
+  "ticker": "AAPL",
+  "scored_at": "2026-03-13T21:56:50.891803",
+  "quarter": "2026-Q1",
+  "composite_score": 4.99,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 8.8,
+    "financial_health": 4.0,
+    "growth": 0.0,
+    "management": 9.3333,
+    "valuation": 1.0
+  },
+  "master_scores": {
+    "buffett": 6.2867,
+    "munger": 6.73,
+    "duan": 6.0133,
+    "lynch": 3.4433
+  },
+  "company_info": {
+    "name": "Apple Inc.",
+    "sector": "Technology",
+    "industry": "Consumer Electronics",
+    "market_cap": 3759141289816.0
+  },
+  "key_metrics": {
+    "pe_ratio": 32.02653226079795,
+    "pb_ratio": 42.77116328472616,
+    "peg_ratio": 5.444510484335658,
+    "ev_to_ebitda": 24.86833676397414,
+    "roe_5y_avg": 1.639225400754853,
+    "roic_5y_avg": 0.4475290057341167,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": -0.039450634871626145,
+    "gross_margin_cv": 0.04224771564223664
+  },
+  "data_quality_flags": [],
+  "years_of_data": 5
+}

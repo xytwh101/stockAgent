@@ -1,0 +1,43 @@
+{
+  "ticker": "NVDA",
+  "scored_at": "2026-03-13T21:57:51.728533",
+  "quarter": "2026-Q1",
+  "composite_score": 7.87,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 8.4,
+    "financial_health": 10.0,
+    "growth": 10.0,
+    "management": 8.0,
+    "valuation": 1.0
+  },
+  "master_scores": {
+    "buffett": 8.06,
+    "munger": 8.39,
+    "duan": 8.94,
+    "lynch": 8.13
+  },
+  "company_info": {
+    "name": "NVIDIA Corporation",
+    "sector": "Technology",
+    "industry": "Semiconductors",
+    "market_cap": 4500313837402.0
+  },
+  "key_metrics": {
+    "pe_ratio": 37.470024569615305,
+    "pb_ratio": 28.60212113698639,
+    "peg_ratio": 1.748601146582047,
+    "ev_to_ebitda": 31.130853342693285,
+    "roe_5y_avg": 0.6430369043825913,
+    "roic_5y_avg": 0.5520129944574992,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": 1.9390518269164572,
+    "gross_margin_cv": 0.10250009781397618
+  },
+  "data_quality_flags": [],
+  "years_of_data": 5
+}

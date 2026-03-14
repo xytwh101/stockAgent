@@ -1,0 +1,43 @@
+{
+  "ticker": "MSFT",
+  "scored_at": "2026-03-13T21:57:22.396030",
+  "quarter": "2026-Q1",
+  "composite_score": 6.14,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 8.8,
+    "financial_health": 8.0,
+    "growth": 2.0,
+    "management": 7.0,
+    "valuation": 3.0
+  },
+  "master_scores": {
+    "buffett": 7.02,
+    "munger": 7.13,
+    "duan": 6.53,
+    "lynch": 4.91
+  },
+  "company_info": {
+    "name": "Microsoft Corporation",
+    "sector": "Technology",
+    "industry": "Software - Infrastructure",
+    "market_cap": 2984657722200.0
+  },
+  "key_metrics": {
+    "pe_ratio": 25.042909895859538,
+    "pb_ratio": 7.640978624880077,
+    "peg_ratio": 1.8201290182042245,
+    "ev_to_ebitda": 16.111069066541265,
+    "roe_5y_avg": 0.35309887303641374,
+    "roic_5y_avg": 0.2764419863925114,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": 0.03202605420584792,
+    "gross_margin_cv": 0.007167805111205582
+  },
+  "data_quality_flags": [],
+  "years_of_data": 4
+}

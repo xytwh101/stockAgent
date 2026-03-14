@@ -1,0 +1,6 @@
+.env
+data/stock_cache.db
+data/raw/
+__pycache__/
+*.pyc
+.DS_Store

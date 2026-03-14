@@ -1,0 +1,45 @@
+{
+  "ticker": "JPM",
+  "scored_at": "2026-03-13T22:14:40.495380",
+  "quarter": "2026-Q1",
+  "composite_score": 1.45,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 3.0,
+    "financial_health": 2.0,
+    "growth": 0.0,
+    "management": 1.0,
+    "valuation": 0.0
+  },
+  "master_scores": {
+    "buffett": 1.8,
+    "munger": 1.75,
+    "duan": 1.6,
+    "lynch": 1.0
+  },
+  "company_info": {
+    "name": "JPMorgan Chase & Co.",
+    "sector": "Financial Services",
+    "industry": "Banks - Diversified",
+    "market_cap": 772753716085.0
+  },
+  "key_metrics": {
+    "pe_ratio": null,
+    "pb_ratio": null,
+    "peg_ratio": null,
+    "ev_to_ebitda": null,
+    "roe_5y_avg": 0.1517527710837262,
+    "roic_5y_avg": 0.06593471999518687,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": null,
+    "gross_margin_cv": null
+  },
+  "data_quality_flags": [
+    "missing_valuation_ttm"
+  ],
+  "years_of_data": 4
+}

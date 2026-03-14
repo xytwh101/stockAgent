@@ -1,0 +1,45 @@
+{
+  "ticker": "AVGO",
+  "scored_at": "2026-03-13T22:00:49.997168",
+  "quarter": "2026-Q1",
+  "composite_score": 7.2833,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 10.0,
+    "financial_health": 6.6667,
+    "growth": 8.0,
+    "management": 9.0,
+    "valuation": 0.0
+  },
+  "master_scores": {
+    "buffett": 7.9333,
+    "munger": 8.3333,
+    "duan": 8.75,
+    "lynch": 7.1
+  },
+  "company_info": {
+    "name": "Broadcom Inc.",
+    "sector": "Technology",
+    "industry": "Semiconductors",
+    "market_cap": 1594017190401.0
+  },
+  "key_metrics": {
+    "pe_ratio": null,
+    "pb_ratio": null,
+    "peg_ratio": null,
+    "ev_to_ebitda": null,
+    "roe_5y_avg": 0.3662036929009307,
+    "roic_5y_avg": 0.15225362268383102,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": 0.1816540426343054,
+    "gross_margin_cv": 0.03317358138077133
+  },
+  "data_quality_flags": [
+    "missing_valuation_ttm"
+  ],
+  "years_of_data": 5
+}

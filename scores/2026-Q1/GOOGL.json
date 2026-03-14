@@ -1,0 +1,43 @@
+{
+  "ticker": "GOOGL",
+  "scored_at": "2026-03-13T21:58:51.531429",
+  "quarter": "2026-Q1",
+  "composite_score": 6.3417,
+  "veto_triggered": true,
+  "veto_reasons": [
+    "[林奇] EPS连续增长不足3年"
+  ],
+  "dimensions": {
+    "business_quality": 8.0,
+    "financial_health": 9.3333,
+    "growth": 4.0,
+    "management": 7.0,
+    "valuation": 1.5
+  },
+  "master_scores": {
+    "buffett": 7.0167,
+    "munger": 7.2417,
+    "duan": 6.95,
+    "lynch": 5.525
+  },
+  "company_info": {
+    "name": "Alphabet Inc.",
+    "sector": "Communication Services",
+    "industry": "Internet Content & Information",
+    "market_cap": 3706037142291.0005
+  },
+  "key_metrics": {
+    "pe_ratio": 27.981554740107434,
+    "pb_ratio": 8.905932573176164,
+    "peg_ratio": 4.20957801457793,
+    "ev_to_ebitda": 20.740287325996963,
+    "roe_5y_avg": 0.28019984198868103,
+    "roic_5y_avg": 0.25349465062704885,
+    "revenue_cagr_5y": null,
+    "eps_cagr_5y": null,
+    "fcf_cagr_3y": 0.06879140249222915,
+    "gross_margin_cv": 0.028033436674132942
+  },
+  "data_quality_flags": [],
+  "years_of_data": 5
+}
