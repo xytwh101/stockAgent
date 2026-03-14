@@ -63,8 +63,10 @@ class DataFetcher:
         )
         self._session.mount("https://", adapter)
 
+        self._offline = False           # 离线模式标志（由 apply_offline_mode 设置）
         self._db_lock = __import__('threading').Lock()
-        self._dirty_count = 0       # 未 commit 的写入计数
+        self._dirty_count = 0           # 未 commit 的缓存写入计数
+        self._checkpoint_dirty = 0      # 未 commit 的断点写入计数
         self._last_commit = time.time()
         db_path = CACHE_CONFIG["db_path"]
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -659,15 +661,24 @@ class DataFetcher:
         }
 
         result = {"ticker": ticker}
-        with ThreadPoolExecutor(max_workers=19) as pool:
-            futures = {pool.submit(fn): key for key, fn in tasks.items()}
-            for future in as_completed(futures):
-                key = futures[future]
+        if self._offline:
+            # 离线模式：顺序读 SQLite，避免多线程争锁
+            for key, fn in tasks.items():
                 try:
-                    result[key] = future.result()
+                    result[key] = fn()
                 except Exception as e:
-                    print(f"  [并发错误] {ticker}/{key}: {e}")
+                    print(f"  [读取错误] {ticker}/{key}: {e}")
                     result[key] = {} if "ttm" in key or key == "profile" else []
+        else:
+            with ThreadPoolExecutor(max_workers=19) as pool:
+                futures = {pool.submit(fn): key for key, fn in tasks.items()}
+                for future in as_completed(futures):
+                    key = futures[future]
+                    try:
+                        result[key] = future.result()
+                    except Exception as e:
+                        print(f"  [并发错误] {ticker}/{key}: {e}")
+                        result[key] = {} if "ttm" in key or key == "profile" else []
         return result
 
     # ─────────────────────────────────────────────
@@ -830,9 +841,10 @@ class DataFetcher:
     def flush_cache(self):
         """强制刷盘，确保所有写入持久化"""
         with self._db_lock:
-            if self._dirty_count > 0:
+            if self._dirty_count > 0 or self._checkpoint_dirty > 0:
                 self.conn.commit()
                 self._dirty_count = 0
+                self._checkpoint_dirty = 0
                 self._last_commit = time.time()
 
     # ─────────────────────────────────────────────
@@ -846,11 +858,16 @@ class DataFetcher:
         ).fetchone() is not None
 
     def mark_scored(self, ticker: str, quarter: str):
-        self.conn.execute(
-            "INSERT OR REPLACE INTO run_checkpoints (quarter, ticker, scored_at) VALUES (?, ?, ?)",
-            (quarter, ticker, int(time.time()))
-        )
-        self.conn.commit()
+        with self._db_lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO run_checkpoints (quarter, ticker, scored_at) VALUES (?, ?, ?)",
+                (quarter, ticker, int(time.time()))
+            )
+            self._checkpoint_dirty += 1
+            # 每 50 条批量提交一次，减少 fsync 次数
+            if self._checkpoint_dirty >= 50:
+                self.conn.commit()
+                self._checkpoint_dirty = 0
 
     def get_remaining_tickers(self, tickers: list[str], quarter: str) -> list[str]:
         scored = {

@@ -33,7 +33,8 @@ def extra_vetoes(fin: NormalizedFinancials) -> list[str]:
     gm = [v for v in fin.gross_margin[:7] if v is not None]
     if len(gm) >= 5:
         recent_avg = sum(gm[:3]) / 3
-        older_avg = sum(gm[4:]) / len(gm[4:])
+        older = gm[3:]   # 年份 4 之后的所有数据（至少 2 个点）
+        older_avg = sum(older) / len(older)
         if older_avg > 0 and (recent_avg - older_avg) < EXTRA_VETO_RULES["max_gross_margin_decline"]:
             triggers.append(
                 f"[段永平] 毛利率长期下滑 {(recent_avg - older_avg):.1%}"
