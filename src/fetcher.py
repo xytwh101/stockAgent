@@ -635,9 +635,61 @@ class DataFetcher:
     # 十二、主力汇总（供 normalizer 使用）
     # ─────────────────────────────────────────────
 
+    # normalizer.normalize() 实际消费的 8 个字段：result_key → cache_key_prefix
+    _SCORING_CACHE_KEYS: dict = {
+        "profile":            "profile",
+        "income_annual":      "income_annual",
+        "balance_annual":     "balance_annual",
+        "cashflow_annual":    "cashflow_annual",
+        "key_metrics_annual": "key_metrics_annual",
+        "ratios_annual":      "ratios_annual",
+        "key_metrics_ttm":    "key_metrics_ttm",
+        "ratios_ttm":         "ratios_ttm",
+    }
+
+    def _batch_cache_read(self, ticker: str) -> dict:
+        """
+        离线模式专用：一次 SQL 批量读取打分所需的所有缓存键，
+        替代原先 19 次串行 _cache_get 调用。
+        返回 {result_key: parsed_data}，缺失或过期的键返回空默认值。
+        """
+        now = int(time.time())
+        key_map = {rk: f"{prefix}:{ticker}" for rk, prefix in self._SCORING_CACHE_KEYS.items()}
+        cache_keys = list(key_map.values())
+
+        placeholders = ",".join("?" * len(cache_keys))
+        with self._db_lock:
+            rows = self.conn.execute(
+                f"SELECT cache_key, data_json, fetched_at, ttl_days FROM cache"
+                f" WHERE cache_key IN ({placeholders})",
+                cache_keys,
+            ).fetchall()
+
+        # 过滤过期行，解析 JSON
+        fresh: dict = {}
+        for cache_key, data_json, fetched_at, ttl_days in rows:
+            if now - fetched_at <= ttl_days * 86400:
+                fresh[cache_key] = json.loads(data_json)
+
+        # 拼装结果，缺失键给默认空值
+        result: dict = {"ticker": ticker}
+        for rk, ck in key_map.items():
+            data = fresh.get(ck)
+            if data is None:
+                result[rk] = {} if ("ttm" in rk or rk == "profile") else []
+            else:
+                result[rk] = data
+        return result
+
     def get_all_financial_data(self, ticker: str) -> dict:
-        """汇总所有数据，normalizer 的直接输入。并发拉取所有端点。"""
-        # 定义所有需要拉取的 (key, callable) 对
+        """汇总所有数据，normalizer 的直接输入。
+        - 离线模式：一次批量 SQL 读取打分所需的 8 个缓存键（跳过价格/季报等无关数据）
+        - 在线模式：并发拉取全部 19 个端点
+        """
+        if self._offline:
+            return self._batch_cache_read(ticker)
+
+        # 在线模式：并发拉取所有端点
         tasks = {
             "profile":            lambda: self.get_profile(ticker),
             "income_annual":      lambda: self.get_income_statement(ticker, "annual", 20),
@@ -661,24 +713,15 @@ class DataFetcher:
         }
 
         result = {"ticker": ticker}
-        if self._offline:
-            # 离线模式：顺序读 SQLite，避免多线程争锁
-            for key, fn in tasks.items():
+        with ThreadPoolExecutor(max_workers=19) as pool:
+            futures = {pool.submit(fn): key for key, fn in tasks.items()}
+            for future in as_completed(futures):
+                key = futures[future]
                 try:
-                    result[key] = fn()
+                    result[key] = future.result()
                 except Exception as e:
-                    print(f"  [读取错误] {ticker}/{key}: {e}")
+                    print(f"  [并发错误] {ticker}/{key}: {e}")
                     result[key] = {} if "ttm" in key or key == "profile" else []
-        else:
-            with ThreadPoolExecutor(max_workers=19) as pool:
-                futures = {pool.submit(fn): key for key, fn in tasks.items()}
-                for future in as_completed(futures):
-                    key = futures[future]
-                    try:
-                        result[key] = future.result()
-                    except Exception as e:
-                        print(f"  [并发错误] {ticker}/{key}: {e}")
-                        result[key] = {} if "ttm" in key or key == "profile" else []
         return result
 
     # ─────────────────────────────────────────────
