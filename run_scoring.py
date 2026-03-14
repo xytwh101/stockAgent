@@ -50,6 +50,8 @@ import os
 import sys
 import time
 import traceback
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 # 确保项目根目录在 sys.path
@@ -268,16 +270,17 @@ def run_offline_cached(
     quarter: str | None = None,
     fresh: bool = False,
     limit: int | None = None,
-    no_sleep: bool = True,
+    workers: int = 8,
 ) -> list[dict]:
     """
     只对数据库中已缓存的股票离线打分，不发任何 API 请求。
+    使用多线程并行加速（默认 8 workers）。
 
     参数:
         quarter:  季度标识，如 "2026-Q1"（默认当前季度）
         fresh:    True 时忽略断点，强制重打所有 ticker
         limit:    只打前 N 只（测试/调试用）
-        no_sleep: 默认 True，离线模式无需限速
+        workers:  并发线程数（默认 8，纯离线可调到 16-32）
 
     返回:
         所有打分成功的结果列表（同时写入 JSON 和汇总 CSV）
@@ -286,22 +289,18 @@ def run_offline_cached(
     out_dir = ensure_output_dir(quarter)
 
     print(f"\n{'='*60}")
-    print(f"  离线打分（仅缓存数据）— {quarter}")
+    print(f"  离线打分（仅缓存数据）— {quarter}  [workers={workers}]")
     print(f"  输出目录: {out_dir}")
     print(f"{'='*60}\n")
 
-    fetcher = DataFetcher()
-    apply_offline_mode(fetcher)
-
-    normalizer = Normalizer()
-    dim_scorer = DimensionScorer()
-    master_scorer = MasterScorer()
-    veto_engine = VetoEngine()
+    # 主 fetcher 只用于查询断点和写 checkpoint，不参与并发打分
+    main_fetcher = DataFetcher()
+    apply_offline_mode(main_fetcher)
 
     run_start = time.time()
 
     try:
-        candidate_pool = get_all_cached_tickers(fetcher)
+        candidate_pool = get_all_cached_tickers(main_fetcher)
         print(f"[来源] 数据库已缓存 ticker，共 {len(candidate_pool)} 只")
 
         if limit:
@@ -314,35 +313,64 @@ def run_offline_cached(
             remaining = candidate_pool
             print(f"[断点] fresh 模式，全量重打 {total} 只\n")
         else:
-            remaining = fetcher.get_remaining_tickers(candidate_pool, quarter)
+            remaining = main_fetcher.get_remaining_tickers(candidate_pool, quarter)
             done = total - len(remaining)
             print(f"[断点] 已完成 {done}/{total}，剩余 {len(remaining)} 只\n")
 
-        print(f"[打分] 开始（{len(remaining)} 只，离线模式无限速）...\n")
+        n = len(remaining)
+        print(f"[打分] 开始（{n} 只，{workers} 线程并行）...\n")
+
         all_results: list[dict] = []
         failed: list[str] = []
+        counter = [0]          # 进度计数（用列表以便闭包修改）
+        print_lock = threading.Lock()
+        checkpoint_lock = threading.Lock()
 
-        for i, ticker in enumerate(remaining, 1):
-            pct = (i / len(remaining)) * 100
-            print(f"  [{i:4d}/{len(remaining)}] {pct:5.1f}%  {ticker}", end="", flush=True)
+        # 每个线程独立的 fetcher/scorer 实例，避免锁竞争
+        _thread_local = threading.local()
 
-            result = score_ticker(
-                ticker, fetcher, normalizer, dim_scorer,
-                master_scorer, veto_engine, quarter
+        def get_thread_components():
+            if not hasattr(_thread_local, "fetcher"):
+                f = DataFetcher()
+                apply_offline_mode(f)
+                _thread_local.fetcher = f
+                _thread_local.normalizer = Normalizer()
+                _thread_local.dim_scorer = DimensionScorer()
+                _thread_local.master_scorer = MasterScorer()
+                _thread_local.veto_engine = VetoEngine()
+            return (
+                _thread_local.fetcher,
+                _thread_local.normalizer,
+                _thread_local.dim_scorer,
+                _thread_local.master_scorer,
+                _thread_local.veto_engine,
             )
 
-            if result:
-                save_ticker_result(result, out_dir)
-                fetcher.mark_scored(ticker, quarter)
-                all_results.append(result)
-                veto_mark = " [VETO]" if result.get("veto_triggered") else ""
-                print(f"  ✓ {result['composite_score']:.3f}{veto_mark}")
-            else:
-                failed.append(ticker)
-                print("  ✗ 跳过")
+        def score_one(ticker: str) -> tuple[str, dict | None]:
+            f, norm, dim_s, mstr_s, veto = get_thread_components()
+            result = score_ticker(ticker, f, norm, dim_s, mstr_s, veto, quarter)
+            return ticker, result
 
-            if not no_sleep:
-                time.sleep(OUTPUT_CONFIG["sleep_between_tickers"])
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(score_one, t): t for t in remaining}
+            for future in as_completed(futures):
+                ticker, result = future.result()
+                with print_lock:
+                    counter[0] += 1
+                    pct = counter[0] / n * 100
+                    if result:
+                        save_ticker_result(result, out_dir)
+                        all_results.append(result)
+                        veto_mark = " [VETO]" if result.get("veto_triggered") else ""
+                        print(f"  [{counter[0]:4d}/{n}] {pct:5.1f}%  {ticker}"
+                              f"  ✓ {result['composite_score']:.3f}{veto_mark}")
+                    else:
+                        failed.append(ticker)
+                        print(f"  [{counter[0]:4d}/{n}] {pct:5.1f}%  {ticker}  ✗ 跳过")
+
+                if result:
+                    with checkpoint_lock:
+                        main_fetcher.mark_scored(ticker, quarter)
 
         # 加载已有结果，生成完整汇总表
         existing_results: list[dict] = []
@@ -357,15 +385,16 @@ def run_offline_cached(
         write_summary_csv(existing_results, out_dir)
 
         elapsed = time.time() - run_start
+        speed = n / elapsed if elapsed > 0 else 0
         print(f"\n{'='*60}")
         print(f"  完成！成功 {len(all_results)} 只，失败 {len(failed)} 只")
-        print(f"  耗时: {elapsed/60:.1f} 分钟")
+        print(f"  耗时: {elapsed/60:.1f} 分钟  ({speed:.1f} 只/秒)")
         print(f"{'='*60}\n")
 
         return all_results
 
     finally:
-        fetcher.close()
+        main_fetcher.close()
 
 
 def main():
@@ -393,6 +422,8 @@ def main():
     parser.add_argument("--fresh",    action="store_true", help="忽略断点，强制重跑所有股票")
     parser.add_argument("--limit",    type=int, default=None, help="只打前 N 只（测试用）")
     parser.add_argument("--no-sleep", action="store_true", help="去掉每只之间的等待（离线模式推荐）")
+    parser.add_argument("--workers",  type=int, default=8,
+                        help="离线并行线程数（仅 --offline-db 生效，默认 8，纯离线可调到 16-32）")
     args = parser.parse_args()
 
     # --offline-db 是 --offline --all-cached 的快捷方式
@@ -401,7 +432,7 @@ def main():
             quarter=args.quarter,
             fresh=args.fresh,
             limit=args.limit,
-            no_sleep=args.no_sleep,
+            workers=args.workers,
         )
         return
 
