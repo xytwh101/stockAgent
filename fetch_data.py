@@ -28,6 +28,7 @@ import os
 import sqlite3
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -300,7 +301,8 @@ def main():
     parser.add_argument("--mode",    choices=["core", "full"], default="core",
                         help="core=打分必需8端点（默认）  full=全量19端点")
     parser.add_argument("--dry-run", action="store_true", help="只估算调用量，不实际拉取")
-    parser.add_argument("--sleep",   type=float, default=0.3, help="每只股票间隔秒数（默认0.3）")
+    parser.add_argument("--sleep",   type=float, default=0.1, help="每只股票间隔秒数（默认0.1）")
+    parser.add_argument("--workers", type=int, default=4, help="并发拉取股票数（默认4）")
     args = parser.parse_args()
 
     endpoints = CORE_ENDPOINTS if args.mode == "core" else FULL_ENDPOINTS
@@ -352,23 +354,53 @@ def main():
         run_start = time.time()
         total_api = 0
         total_skip = 0
-        failed = []
+        workers = args.workers
+        completed_count = 0
 
-        for i, ticker in enumerate(tickers, 1):
-            pct = i / total * 100
-            print(f"  [{i:4d}/{total}] {pct:5.1f}%  {ticker:<8}", end="", flush=True)
+        import threading
+        print_lock = threading.Lock()
 
-            made, skipped = fetch_ticker(ticker, fetcher, endpoints, dry_run=False)
-            total_api += made
-            total_skip += skipped
+        if workers <= 1:
+            # 单线程模式（兼容旧行为）
+            for i, ticker in enumerate(tickers, 1):
+                pct = i / total * 100
+                print(f"  [{i:4d}/{total}] {pct:5.1f}%  {ticker:<8}", end="", flush=True)
+                made, skipped = fetch_ticker(ticker, fetcher, endpoints, dry_run=False)
+                total_api += made
+                total_skip += skipped
+                if made > 0:
+                    print(f"  +{made} API  (缓存命中 {skipped})")
+                else:
+                    print(f"  全部命中缓存")
+                if i < total and made > 0:
+                    time.sleep(args.sleep)
+        else:
+            # 多线程并发拉取
+            print(f"  并发线程数: {workers}\n")
 
-            if made > 0:
-                print(f"  +{made} API  (缓存命中 {skipped})")
-            else:
-                print(f"  全部命中缓存")
+            def _fetch_one(ticker_idx_tuple):
+                idx, ticker = ticker_idx_tuple
+                made, skipped = fetch_ticker(ticker, fetcher, endpoints, dry_run=False)
+                if args.sleep > 0 and made > 0:
+                    time.sleep(args.sleep)
+                return idx, ticker, made, skipped
 
-            if i < total and made > 0:
-                time.sleep(args.sleep)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_fetch_one, (i, t)): t
+                    for i, t in enumerate(tickers, 1)
+                }
+                for future in as_completed(futures):
+                    idx, ticker, made, skipped = future.result()
+                    total_api += made
+                    total_skip += skipped
+                    completed_count += 1
+                    pct = completed_count / total * 100
+                    with print_lock:
+                        if made > 0:
+                            print(f"  [{completed_count:4d}/{total}] {pct:5.1f}%  {ticker:<8}  +{made} API  (缓存命中 {skipped})")
+                        else:
+                            print(f"  [{completed_count:4d}/{total}] {pct:5.1f}%  {ticker:<8}  全部命中缓存")
 
         elapsed = time.time() - run_start
         print(f"\n{'='*60}")

@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import yfinance as yf
@@ -51,10 +52,22 @@ class DataFetcher:
 
         self._request_times: list[float] = []
         self._rate_limit = API_CONFIG["fmp_rate_limit_per_minute"]
+        self._rate_lock = __import__('threading').Lock()
 
+        # HTTP 连接池（keep-alive 复用连接）
+        self._session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=20,
+            max_retries=0,  # 我们自己管理重试
+        )
+        self._session.mount("https://", adapter)
+
+        self._db_lock = __import__('threading').Lock()
         db_path = CACHE_CONFIG["db_path"]
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")  # 并发读写性能
         self._init_db()
 
     # ─────────────────────────────────────────────
@@ -618,35 +631,41 @@ class DataFetcher:
     # ─────────────────────────────────────────────
 
     def get_all_financial_data(self, ticker: str) -> dict:
-        """汇总所有数据，normalizer 的直接输入"""
-        return {
-            "ticker": ticker,
-            "profile": self.get_profile(ticker),
-            # 年报（20年）
-            "income_annual":   self.get_income_statement(ticker, "annual", 20),
-            "balance_annual":  self.get_balance_sheet(ticker, "annual", 20),
-            "cashflow_annual": self.get_cash_flow_statement(ticker, "annual", 20),
-            # 季报（近20季 = 5年）
-            "income_quarterly":   self.get_income_statement(ticker, "quarter", 20),
-            "balance_quarterly":  self.get_balance_sheet(ticker, "quarter", 20),
-            "cashflow_quarterly": self.get_cash_flow_statement(ticker, "quarter", 20),
-            # 指标历史
-            "key_metrics_annual": self.get_key_metrics(ticker, "annual", 20),
-            "ratios_annual":      self.get_financial_ratios(ticker, "annual", 20),
-            "enterprise_values":  self.get_enterprise_values(ticker, "annual", 20),
-            "income_growth":      self.get_income_growth(ticker, 20),
-            "cashflow_growth":    self.get_cashflow_growth(ticker, 20),
-            # 当前TTM
-            "key_metrics_ttm": self.get_key_metrics_ttm(ticker),
-            "ratios_ttm":      self.get_ratios_ttm(ticker),
-            # 信号数据
-            "earnings_history":  self.get_earnings_history(ticker, 40),
-            "insider_trading":   self.get_insider_trading(ticker, 100),
-            "analyst_estimates": self.get_analyst_estimates(ticker, 8),
-            "dividend_history":  self.get_dividend_history(ticker),
-            # 历史价格
-            "price_daily": self.get_price_history_daily(ticker, 20),
+        """汇总所有数据，normalizer 的直接输入。并发拉取所有端点。"""
+        # 定义所有需要拉取的 (key, callable) 对
+        tasks = {
+            "profile":            lambda: self.get_profile(ticker),
+            "income_annual":      lambda: self.get_income_statement(ticker, "annual", 20),
+            "balance_annual":     lambda: self.get_balance_sheet(ticker, "annual", 20),
+            "cashflow_annual":    lambda: self.get_cash_flow_statement(ticker, "annual", 20),
+            "income_quarterly":   lambda: self.get_income_statement(ticker, "quarter", 20),
+            "balance_quarterly":  lambda: self.get_balance_sheet(ticker, "quarter", 20),
+            "cashflow_quarterly": lambda: self.get_cash_flow_statement(ticker, "quarter", 20),
+            "key_metrics_annual": lambda: self.get_key_metrics(ticker, "annual", 20),
+            "ratios_annual":      lambda: self.get_financial_ratios(ticker, "annual", 20),
+            "enterprise_values":  lambda: self.get_enterprise_values(ticker, "annual", 20),
+            "income_growth":      lambda: self.get_income_growth(ticker, 20),
+            "cashflow_growth":    lambda: self.get_cashflow_growth(ticker, 20),
+            "key_metrics_ttm":    lambda: self.get_key_metrics_ttm(ticker),
+            "ratios_ttm":         lambda: self.get_ratios_ttm(ticker),
+            "earnings_history":   lambda: self.get_earnings_history(ticker, 40),
+            "insider_trading":    lambda: self.get_insider_trading(ticker, 100),
+            "analyst_estimates":  lambda: self.get_analyst_estimates(ticker, 8),
+            "dividend_history":   lambda: self.get_dividend_history(ticker),
+            "price_daily":        lambda: self.get_price_history_daily(ticker, 20),
         }
+
+        result = {"ticker": ticker}
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(fn): key for key, fn in tasks.items()}
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    result[key] = future.result()
+                except Exception as e:
+                    print(f"  [并发错误] {ticker}/{key}: {e}")
+                    result[key] = {} if "ttm" in key or key == "profile" else []
+        return result
 
     # ─────────────────────────────────────────────
     # yfinance Fallback
@@ -721,13 +740,14 @@ class DataFetcher:
     # ─────────────────────────────────────────────
 
     def _rate_limit_wait(self):
-        now = time.time()
-        self._request_times = [t for t in self._request_times if now - t < 60]
-        if len(self._request_times) >= self._rate_limit:
-            sleep_time = 60 - (now - self._request_times[0]) + 0.1
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-        self._request_times.append(time.time())
+        with self._rate_lock:
+            now = time.time()
+            self._request_times = [t for t in self._request_times if now - t < 60]
+            if len(self._request_times) >= self._rate_limit:
+                sleep_time = 60 - (now - self._request_times[0]) + 0.1
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            self._request_times.append(time.time())
 
     def _fmp_request(self, endpoint: str, params: dict | None = None) -> Any:
         if not self.api_key:
@@ -741,7 +761,7 @@ class DataFetcher:
         for attempt in range(self.max_retries):
             try:
                 self._rate_limit_wait()
-                resp = requests.get(url, params=req_params, timeout=self.timeout)
+                resp = self._session.get(url, params=req_params, timeout=self.timeout)
 
                 if resp.status_code == 429:
                     wait = self.retry_backoff * (2 ** attempt)
@@ -775,26 +795,29 @@ class DataFetcher:
 
     def _cache_get(self, cache_key: str, ttl_days: int) -> Any | None:
         now = int(time.time())
-        row = self.conn.execute(
-            "SELECT data_json, fetched_at, ttl_days FROM cache WHERE cache_key = ?",
-            (cache_key,)
-        ).fetchone()
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT data_json, fetched_at, ttl_days FROM cache WHERE cache_key = ?",
+                (cache_key,)
+            ).fetchone()
         if not row:
             return None
         data_json, fetched_at, stored_ttl = row
         if now - fetched_at > stored_ttl * 86400:
-            self.conn.execute("DELETE FROM cache WHERE cache_key = ?", (cache_key,))
-            self.conn.commit()
+            with self._db_lock:
+                self.conn.execute("DELETE FROM cache WHERE cache_key = ?", (cache_key,))
+                self.conn.commit()
             return None
         return json.loads(data_json)
 
     def _cache_set(self, cache_key: str, data: Any, ttl_days: int):
         now = int(time.time())
-        self.conn.execute(
-            "INSERT OR REPLACE INTO cache (cache_key, data_json, fetched_at, ttl_days) VALUES (?, ?, ?, ?)",
-            (cache_key, json.dumps(data, ensure_ascii=False), now, ttl_days)
-        )
-        self.conn.commit()
+        with self._db_lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO cache (cache_key, data_json, fetched_at, ttl_days) VALUES (?, ?, ?, ?)",
+                (cache_key, json.dumps(data, ensure_ascii=False), now, ttl_days)
+            )
+            self.conn.commit()
 
     # ─────────────────────────────────────────────
     # 断点续跑
@@ -828,6 +851,7 @@ class DataFetcher:
         return {"total": total, "done": done, "remaining": total - done}
 
     def close(self):
+        self._session.close()
         self.conn.close()
 
 
