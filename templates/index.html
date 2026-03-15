@@ -45,6 +45,12 @@ body { background: var(--bg); color: var(--txt); font-family: -apple-system, Bli
 .nav-brand { font-weight: 700; font-size: 1rem; white-space: nowrap; }
 .nav-brand i { color: var(--blue); margin-right: 6px; }
 .quarter-sel { background: var(--bg); border: 1px solid var(--border); color: var(--txt); border-radius: 6px; padding: 5px 10px; font-size: 0.82rem; cursor: pointer; }
+.mode-tabs { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.mode-tab { background: var(--bg); border: none; color: var(--txt2); padding: 5px 12px; font-size: 0.78rem; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.mode-tab.active { background: var(--blue); color: #fff; }
+.mode-tab:hover:not(.active) { background: var(--bg3); }
+.range-go-btn { background: var(--blue); border: none; color: #fff; border-radius: 6px; padding: 5px 14px; font-size: 0.82rem; cursor: pointer; font-weight: 600; transition: opacity .15s; white-space: nowrap; }
+.range-go-btn:hover { opacity: .85; }
 
 /* ── Layout ── */
 .layout { display: flex; flex: 1; overflow: hidden; }
@@ -142,9 +148,24 @@ body { background: var(--bg); color: var(--txt); font-family: -apple-system, Bli
 <div class="nav">
   <div class="nav-brand"><i class="bi bi-graph-up-arrow"></i>投资大师选股系统</div>
   <div style="flex:1"></div>
-  <select class="quarter-sel" id="quarterSel" onchange="onQuarterChange()">
-    <option>加载中…</option>
-  </select>
+  <!-- Mode tabs -->
+  <div class="mode-tabs" id="modeTabs">
+    <button class="mode-tab active" data-mode="quarter" onclick="setMode('quarter')">单季度</button>
+    <button class="mode-tab" data-mode="range" onclick="setMode('range')">区间</button>
+  </div>
+  <!-- Single quarter selector -->
+  <div id="singleSel">
+    <select class="quarter-sel" id="quarterSel" onchange="onQuarterChange()">
+      <option>加载中…</option>
+    </select>
+  </div>
+  <!-- Range selectors -->
+  <div id="rangeSel" style="display:none;align-items:center;gap:6px">
+    <select class="quarter-sel" id="rangeFrom"></select>
+    <span style="color:var(--txt2);font-size:.82rem">~</span>
+    <select class="quarter-sel" id="rangeTo"></select>
+    <button class="range-go-btn" id="rangeGoBtn" onclick="onRangeGo()">查看</button>
+  </div>
   <button id="themeBtn" onclick="toggleTheme()"
     style="background:var(--bg3);border:1px solid var(--border);color:var(--txt2);border-radius:6px;padding:5px 10px;font-size:0.82rem;cursor:pointer;transition:all .15s;white-space:nowrap"
     title="切换明亮/夜间模式">🌙 夜间</button>
@@ -204,7 +225,14 @@ function toggleTheme() {
 }
 
 // ── State ─────────────────────────────────────────────────────
-const S = { stocks: [], filtered: [], ticker: null, quarter: '', year: '', viewMode: 'quarter', sort: 'score', query: '', charts: {} };
+const S = {
+  stocks: [], filtered: [], ticker: null,
+  mode: 'quarter',          // 'quarter' | 'range'
+  quarter: '',              // single quarter mode
+  rangeQuarters: [],        // range mode: selected quarters list
+  allQuarters: [],          // all available quarters (sorted asc)
+  sort: 'score', query: '', charts: {},
+};
 
 // ── Helpers ───────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -233,53 +261,72 @@ const DIMS = [
 // ── Init ──────────────────────────────────────────────────────
 async function init() {
   const resp = await fetch('/api/quarters').then(r => r.json());
-  // 兼容旧格式（纯数组）和新格式（{quarters, years}）
   const quarters = Array.isArray(resp) ? resp : (resp.quarters || []);
   const years = Array.isArray(resp) ? {} : (resp.years || {});
-  const sel = $('quarterSel');
 
   if (!quarters.length) {
-    sel.innerHTML = '<option>暂无数据</option>';
+    $('quarterSel').innerHTML = '<option>暂无数据</option>';
     return;
   }
 
-  // 构建分组选择器：年度汇总 + 各季度
+  // Store all quarters sorted ascending for range picker
+  S.allQuarters = [...quarters].sort();
+
+  // Build single-quarter selector (grouped by year)
+  const sel = $('quarterSel');
   let html = '';
   const sortedYears = Object.keys(years).sort().reverse();
   for (const yr of sortedYears) {
     const qs = years[yr];
-    // 年度汇总选项（仅当该年有 ≥1 个季度时显示）
     html += `<optgroup label="${yr} 年">`;
-    if (qs.length > 1) {
-      html += `<option value="year:${yr}">📊 ${yr} 年度汇总（${qs.length}季）</option>`;
-    }
     for (const q of qs) {
-      html += `<option value="quarter:${q}">${q}</option>`;
+      html += `<option value="${q}">${q}</option>`;
     }
     html += '</optgroup>';
   }
   sel.innerHTML = html;
+  sel.value = quarters[0];
+  S.quarter = quarters[0];
 
-  // 默认选第一个季度
-  sel.value = `quarter:${quarters[0]}`;
-  parseSelection(sel.value);
+  // Build range selectors
+  const fromSel = $('rangeFrom');
+  const toSel = $('rangeTo');
+  const rangeOpts = S.allQuarters.map(q => `<option value="${q}">${q}</option>`).join('');
+  fromSel.innerHTML = rangeOpts;
+  toSel.innerHTML = rangeOpts;
+  // Default: from=oldest, to=newest
+  fromSel.value = S.allQuarters[0];
+  toSel.value = S.allQuarters[S.allQuarters.length - 1];
+
   loadStocks();
 }
 
-function parseSelection(val) {
-  if (val.startsWith('year:')) {
-    S.viewMode = 'year';
-    S.year = val.slice(5);
-    S.quarter = '';
-  } else {
-    S.viewMode = 'quarter';
-    S.quarter = val.replace('quarter:', '');
-    S.year = '';
-  }
+function setMode(mode) {
+  S.mode = mode;
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+  $('singleSel').style.display = mode === 'quarter' ? '' : 'none';
+  $('rangeSel').style.display = mode === 'range' ? 'flex' : 'none';
+
+  S.ticker = null;
+  $('welcome').style.display = '';
+  $('detail').style.display = 'none';
+  loadStocks();
 }
 
 function onQuarterChange() {
-  parseSelection($('quarterSel').value);
+  S.quarter = $('quarterSel').value;
+  S.ticker = null;
+  $('welcome').style.display = '';
+  $('detail').style.display = 'none';
+  loadStocks();
+}
+
+function onRangeGo() {
+  const from = $('rangeFrom').value;
+  const to = $('rangeTo').value;
+  // Collect all quarters within [from, to]
+  S.rangeQuarters = S.allQuarters.filter(q => q >= from && q <= to);
+  if (!S.rangeQuarters.length) return;
   S.ticker = null;
   $('welcome').style.display = '';
   $('detail').style.display = 'none';
@@ -288,7 +335,10 @@ function onQuarterChange() {
 
 // ── API query string helper ───────────────────────────────────
 function apiParam() {
-  return S.viewMode === 'year' ? `year=${S.year}` : `quarter=${S.quarter}`;
+  if (S.mode === 'range' && S.rangeQuarters.length) {
+    return `quarters=${S.rangeQuarters.join(',')}`;
+  }
+  return `quarter=${S.quarter}`;
 }
 
 // ── Stock list ─────────────────────────────────────────────────
@@ -392,12 +442,13 @@ function renderDetail(d) {
     </div>
   </div>`;
 
-  // ── Year mode badge ──
-  const yearBadge = d._quarters_included
+  // ── Multi-quarter badge ──
+  const qInc = d._quarters_included;
+  const rangeBadge = qInc && qInc.length > 1
     ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-        <span style="background:var(--blue);color:#fff;border-radius:4px;padding:2px 10px;font-size:.78rem;font-weight:600">年度汇总</span>
-        <span style="font-size:.78rem;color:var(--txt2)">包含季度：</span>
-        ${d._quarters_included.map(q => {
+        <span style="background:var(--blue);color:#fff;border-radius:4px;padding:2px 10px;font-size:.78rem;font-weight:600">${qInc.length}季聚合</span>
+        <span style="font-size:.78rem;color:var(--txt2)">${qInc[0]} ~ ${qInc[qInc.length-1]}</span>
+        ${qInc.map(q => {
           const qs = d._quarter_scores?.[q];
           return `<span class="pill" style="font-size:.75rem">${q} <span style="color:${scoreColor(qs||0)};font-weight:700">${qs!=null?qs.toFixed(2):'N/A'}</span></span>`;
         }).join('')}
@@ -497,7 +548,7 @@ function renderDetail(d) {
   // ── Assemble ──
   $('detail').innerHTML = `
   ${hdr}
-  ${yearBadge}
+  ${rangeBadge}
   ${vetoHtml}
 
   <!-- Master scores -->

@@ -32,12 +32,12 @@ stock_scoring_agent/
 ├── scores/{quarter}/      # 输出目录，按季度归档
 │   ├── {TICKER}.json      # 单股详细打分
 │   ├── _summary.csv       # 全量汇总表
-│   ├── _run_log.txt       # 运行日志
-│   └── backtest/          # 回测输出（backtest.py 生成）
-│       ├── backtest_{quarter}_{score_key}_{N}y.csv
-│       └── backtest_{quarter}_{score_key}_{N}y_report.txt
+│   └── _run_log.txt       # 运行日志
+├── scores/backtest/       # 回测输出目录（backtest.py 生成）
+│   ├── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}.csv
+│   └── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}_report.txt
 ├── templates/
-│   └── index.html         # 看板前端（Bootstrap + Chart.js，支持明亮/夜间模式）
+│   └── index.html         # 看板前端（Bootstrap + Chart.js，单季度/区间模式，明亮/夜间主题）
 ├── tests/
 │   └── test_fetch.py      # 数据拉取测试（python tests/test_fetch.py AAPL MSFT）
 └── .env                   # FMP_API_KEY（不提交到 git）
@@ -111,29 +111,40 @@ python dashboard.py
 # 浏览器自动打开 http://localhost:5001
 # 功能：侧边栏股票列表 + 详情页（雷达图/营收/利润率/ROE/EPS 等 6 张图表）
 # 支持明亮/夜间模式切换，偏好存入 localStorage
+# 导航栏两种模式：
+#   单季度 — 下拉选单个季度
+#   区间   — 选 from~to 季度范围，聚合查看多季度平均打分
 
 # ── 打分回测验证（backtest.py）───────────────────────────
 # 列出所有可回测的季度
 python backtest.py --list
 
-# 单季度回测：2023-Q1 打分 vs 未来3年实际涨幅
-python backtest.py --quarter 2023-Q1 --forward-years 3
+# 基本用法：指定打分时段 + 评估时段
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1
 
-# 年度回测：汇总 2023 年所有季度，输出逐季明细 + 全年池化指标
-python backtest.py --year 2023 --forward-years 3
+# 年度打分 vs 年度评估（自动展开为4个季度）
+python backtest.py --score-period 2023 --eval-period 2024
 
-# 验证某一大师维度的预测能力（季度或年度均可）
-python backtest.py --quarter 2023-Q1 --score-key buffett --forward-years 3
-python backtest.py --year 2023 --score-key buffett
+# 多年打分范围（逗号分隔 = 空格分隔）
+python backtest.py --score-period 2023,2024 --eval-period 2025-Q2
 
-# 对比所有打分维度，看哪个维度 IC 最高
-python backtest.py --quarter 2023-Q1 --all-keys
+# 验证某一大师维度
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --score-key buffett
 
-# 验证否决规则（被否决股票是否真的跑输）
-python backtest.py --quarter 2023-Q1 --include-veto
+# 对比所有打分维度 IC
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --all-keys
 
-# 只看 Top N 高分股的区分度
-python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
+# 包含否决股验证否决规则有效性
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --include-veto
+
+# 多季度聚合方式：等权平均(默认) / 取最新
+python backtest.py --score-period 2023 --eval-period 2024 --agg-mode latest
+
+# 不自动打分（仅用已有数据）
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --no-auto-score
+
+# 强制重新打分
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --fresh-score
 ```
 
 ---
@@ -324,14 +335,50 @@ python fetch_data.py --all --mode core
 
 ## 可视化看板（dashboard.py）
 
+### 前端功能
+
+**导航栏时间选择器**（两种模式）：
+- **单季度模式**：下拉选择单个季度（按年分组），直接查看该季度打分
+- **区间模式**：选择起始季度（from）和结束季度（to），点"查看"聚合范围内所有季度
+
+**区间聚合逻辑**：
+- 多个季度的各维度分、大师分、综合分取**等权平均**
+- 详情页顶部显示蓝色 badge 标注包含的季度及各季得分
+- 多季度时自动展示**季度趋势图**（综合分 + 五维分跨季度折线图）
+
+**详情页内容**：
+- 公司基本信息 + 关键指标 pills
+- 否决状态（通过/触发）
+- 四大师得分卡片
+- 五维雷达图 + 大师得分柱状图
+- 季度趋势图（仅多季度模式）
+- 营收/净利润、毛利率/净利率、ROE/ROIC、EPS/FCF 共 4 组时序图表
+- 评分维度详情（可展开子指标）
+- 大师权重矩阵表
+- 关键指标网格
+
 ### API 端点
 
 | 端点 | 说明 |
 |------|------|
-| `GET /api/quarters` | 返回 `scores/` 下所有季度目录列表 |
-| `GET /api/stocks?quarter=2026-Q1` | 返回该季度所有股票摘要（从 JSON 文件读取） |
-| `GET /api/stock/{ticker}?quarter=2026-Q1` | 返回单股完整数据，附带从 SQLite 提取的历史财务时序 |
+| `GET /api/quarters` | 返回 `{quarters: [...], years: {2026: [...]}}`，按年分组 |
+| `GET /api/stocks?quarter=2026-Q1` | 单季度所有股票摘要 |
+| `GET /api/stocks?quarters=Q1,Q2,...` | 自定义多季度聚合（等权平均） |
+| `GET /api/stocks?year=2026` | 年度聚合（该年所有季度平均） |
+| `GET /api/stock/{ticker}?quarter=2026-Q1` | 单股完整数据 + 历史财务时序 |
+| `GET /api/stock/{ticker}?quarters=Q1,Q2` | 多季度聚合的单股数据 |
 | `GET /api/data?quarter=2026-Q1` | 兼容接口，返回 CSV 平铺数据 |
+
+**参数优先级**：`quarters` > `year` > `quarter`
+
+### 多季度聚合返回的额外字段
+
+| 字段 | 说明 |
+|------|------|
+| `_quarters_included` | 包含的季度列表，如 `["2023-Q1", "2023-Q2"]` |
+| `_quarter_scores` | 各季度综合分，如 `{"2023-Q1": 7.5, "2023-Q2": 8.0}` |
+| `_quarter_dimensions` | 各季度五维分 |
+| `_quarter_master_scores` | 各季度大师分 |
 
 ### 历史财务数据（`financials` 字段）
 
@@ -345,29 +392,37 @@ python fetch_data.py --all --mode core
 
 ## 打分回测验证（backtest.py）
 
-### 两种回测粒度
+### 核心概念
 
-| 模式 | 参数 | 说明 |
-|------|------|------|
-| **季度模式** | `--quarter 2023-Q1` | 单季度打分 vs 未来 N 年涨幅 |
-| **年度模式** | `--year 2023` | 汇总该年所有季度，输出逐季明细 + 全年池化指标 |
+用 **打分时段** 的评分，验证 **评估时段** 的实际涨幅是否与打分排名一致。
 
-`--quarter` 和 `--year` 互斥；两者均不填时自动选最新季度。
+### 时间段输入格式
+
+| 格式 | 示例 | 展开结果 |
+|------|------|---------|
+| 单季度 | `2023-Q1` | `['2023-Q1']` |
+| 多季度 | `"2023-Q1 2023-Q2"` | `['2023-Q1', '2023-Q2']` |
+| 单年 | `2023` | `['2023-Q1', ..., '2023-Q4']` |
+| 多年 | `"2023 2024"` 或 `2023,2024` | `['2023-Q1', ..., '2024-Q4']` |
+| 混合 | `"2023 2024-Q1"` | `['2023-Q1', ..., '2023-Q4', '2024-Q1']` |
 
 ### 核心逻辑
 
 ```
-季度模式：
-  历史打分（某季度末）→ 以季度末股价为起点
-  → N 年后股价为终点（超过今天则截止到今天）
-  → 计算实际涨幅 → 对比预测排名 vs 实际涨幅排名
-  → 输出 IC / 命中率 / 五分位组收益
-
-年度模式：
-  对该年每个季度分别执行上述流程
-  → 打印逐季对比表（IC / 命中率 / Q1~Q5收益 / 超额）
-  → 合并所有季度数据计算全年池化指标（样本更大，统计更稳健）
+1. 解析打分时段 + 评估时段 → 季度列表
+2. 自动打分（若尚未打分，调用 run_scoring.py 离线打分）
+3. 聚合多季度打分（默认等权平均 | 可选取最新）
+4. 以打分时段末尾 → 评估时段末尾的股价涨幅计算实际收益
+5. 计算 IC / 命中率 / 五分位组收益
+6. 输出报告：整体评估 → 个股明细
 ```
+
+### 多季度聚合方式
+
+| 模式 | `--agg-mode` | 说明 |
+|------|-------------|------|
+| 等权平均（默认） | `quarter_weighted` | 多个季度的分数取平均 |
+| 取最新 | `latest` | 用最新季度的分数 |
 
 ### 评估指标
 
@@ -378,24 +433,45 @@ python fetch_data.py --all --mode core
 | **五分位组收益** | Q1（高分）到 Q5（低分）各组平均涨幅 | Q1 > Q5 说明区分度好 |
 | **Q1-Q5 年化超额** | 高低分位收益差 / 前瞻年数 | 正值且显著为佳 |
 
+### 报告输出结构
+
+```
+[总体评估]
+  评级: 优秀/良好/有效/较弱/无效
+  说明: 一句话评价
+
+[核心指标]
+  IC / 命中率 / 有效样本数 / 前瞻期
+
+[五分位组收益]
+  Q1~Q5 各组总收益 + 年化收益
+
+[个股明细]
+  Top 20 高分股 / Bottom 10 低分股
+  最大赢家 Top 5 / 最大输家 Bottom 5
+  多季度得分趋势（聚合模式时）
+```
+
 ### 命令行参数
 
 | 参数 | 默认值 | 说明 |
 |------|-------|------|
-| `--quarter` | 最新季度 | 回测单个季度，如 2023-Q1（与 --year 互斥） |
-| `--year` | — | 回测整年，如 2023（与 --quarter 互斥） |
-| `--forward-years` | 3 | 前瞻期（年），支持小数如 1.5 |
+| `--score-period` | 最新季度 | 打分时段 (支持季度/年/混合格式) |
+| `--eval-period` | 必填 | 评估时段 (必须晚于打分时段) |
 | `--score-key` | composite_score | 排名依据：composite_score / buffett / munger / duan / lynch |
+| `--agg-mode` | quarter_weighted | 多季度聚合：quarter_weighted / latest |
 | `--top-n` | 全部 | 只取高分前 N 只 |
-| `--all-keys` | — | 对所有打分维度逐一回测并汇总对比（季度模式） |
-| `--include-veto` | — | 包含被否决股票（验证否决规则有效性） |
-| `--end-date` | — | 手动指定终止日期（YYYY-MM-DD） |
+| `--all-keys` | — | 对所有打分维度逐一回测并对比 |
+| `--include-veto` | — | 包含被否决股票 |
+| `--no-auto-score` | — | 不自动打分，仅用已有数据 |
+| `--fresh-score` | — | 强制重新打分 |
 | `--no-save` | — | 不保存报告文件 |
 
 ### 前提条件
 
 需要历史价格数据（`price_daily:{ticker}` 缓存 TTL 7 天）。
 建议先运行 `fetch_data.py --all --mode full` 将价格写入缓存，回测时不发出额外网络请求。
+打分会自动执行（调用 `run_offline_cached`），也可用 `--no-auto-score` 跳过。
 
 ---
 
@@ -404,6 +480,7 @@ python fetch_data.py --all --mode core
 - **V1（完成）**: 跑通打分流水线 ✓
 - **V1.5（完成）**: 可视化看板 ✓（Flask + Chart.js，明亮/夜间模式）
 - **V2（完成）**: 打分回测验证 ✓（IC / 五分位 / 命中率，backtest.py）+ PIT 历史打分 ✓（apply_pit_filter，防数据穿越）
+- **V2.5（完成）**: 前端区间选择 ✓（单季度/区间模式切换，自定义 from~to 多季度聚合查看）+ 回测 v2 ✓（灵活时间段输入、自动打分、多季度聚合、结构化报告）
 - **V3**: LLM 读 10-K 做定性分析
 - **V4**: 权重自动优化（基于回测 IC 反向调参）
 
