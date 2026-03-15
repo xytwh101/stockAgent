@@ -32,12 +32,12 @@ stock_scoring_agent/
 ├── scores/{quarter}/      # 输出目录，按季度归档
 │   ├── {TICKER}.json      # 单股详细打分
 │   ├── _summary.csv       # 全量汇总表
-│   ├── _run_log.txt       # 运行日志
-│   └── backtest/          # 回测输出（backtest.py 生成）
-│       ├── backtest_{quarter}_{score_key}_{N}y.csv
-│       └── backtest_{quarter}_{score_key}_{N}y_report.txt
+│   └── _run_log.txt       # 运行日志
+├── scores/backtest/       # 回测输出目录（backtest.py 生成）
+│   ├── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}.csv
+│   └── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}_report.txt
 ├── templates/
-│   └── index.html         # 看板前端（Bootstrap + Chart.js，支持明亮/夜间模式）
+│   └── index.html         # 看板前端（Bootstrap + Chart.js，单季度/区间模式，明亮/夜间主题）
 ├── tests/
 │   └── test_fetch.py      # 数据拉取测试（python tests/test_fetch.py AAPL MSFT）
 └── .env                   # FMP_API_KEY（不提交到 git）
@@ -111,6 +111,9 @@ python dashboard.py
 # 浏览器自动打开 http://localhost:5001
 # 功能：侧边栏股票列表 + 详情页（雷达图/营收/利润率/ROE/EPS 等 6 张图表）
 # 支持明亮/夜间模式切换，偏好存入 localStorage
+# 导航栏两种模式：
+#   单季度 — 下拉选单个季度
+#   区间   — 选 from~to 季度范围，聚合查看多季度平均打分
 
 # ── 打分回测验证（backtest.py）───────────────────────────
 # 列出所有可回测的季度
@@ -332,14 +335,50 @@ python fetch_data.py --all --mode core
 
 ## 可视化看板（dashboard.py）
 
+### 前端功能
+
+**导航栏时间选择器**（两种模式）：
+- **单季度模式**：下拉选择单个季度（按年分组），直接查看该季度打分
+- **区间模式**：选择起始季度（from）和结束季度（to），点"查看"聚合范围内所有季度
+
+**区间聚合逻辑**：
+- 多个季度的各维度分、大师分、综合分取**等权平均**
+- 详情页顶部显示蓝色 badge 标注包含的季度及各季得分
+- 多季度时自动展示**季度趋势图**（综合分 + 五维分跨季度折线图）
+
+**详情页内容**：
+- 公司基本信息 + 关键指标 pills
+- 否决状态（通过/触发）
+- 四大师得分卡片
+- 五维雷达图 + 大师得分柱状图
+- 季度趋势图（仅多季度模式）
+- 营收/净利润、毛利率/净利率、ROE/ROIC、EPS/FCF 共 4 组时序图表
+- 评分维度详情（可展开子指标）
+- 大师权重矩阵表
+- 关键指标网格
+
 ### API 端点
 
 | 端点 | 说明 |
 |------|------|
-| `GET /api/quarters` | 返回 `scores/` 下所有季度目录列表 |
-| `GET /api/stocks?quarter=2026-Q1` | 返回该季度所有股票摘要（从 JSON 文件读取） |
-| `GET /api/stock/{ticker}?quarter=2026-Q1` | 返回单股完整数据，附带从 SQLite 提取的历史财务时序 |
+| `GET /api/quarters` | 返回 `{quarters: [...], years: {2026: [...]}}`，按年分组 |
+| `GET /api/stocks?quarter=2026-Q1` | 单季度所有股票摘要 |
+| `GET /api/stocks?quarters=Q1,Q2,...` | 自定义多季度聚合（等权平均） |
+| `GET /api/stocks?year=2026` | 年度聚合（该年所有季度平均） |
+| `GET /api/stock/{ticker}?quarter=2026-Q1` | 单股完整数据 + 历史财务时序 |
+| `GET /api/stock/{ticker}?quarters=Q1,Q2` | 多季度聚合的单股数据 |
 | `GET /api/data?quarter=2026-Q1` | 兼容接口，返回 CSV 平铺数据 |
+
+**参数优先级**：`quarters` > `year` > `quarter`
+
+### 多季度聚合返回的额外字段
+
+| 字段 | 说明 |
+|------|------|
+| `_quarters_included` | 包含的季度列表，如 `["2023-Q1", "2023-Q2"]` |
+| `_quarter_scores` | 各季度综合分，如 `{"2023-Q1": 7.5, "2023-Q2": 8.0}` |
+| `_quarter_dimensions` | 各季度五维分 |
+| `_quarter_master_scores` | 各季度大师分 |
 
 ### 历史财务数据（`financials` 字段）
 
@@ -441,6 +480,7 @@ python fetch_data.py --all --mode core
 - **V1（完成）**: 跑通打分流水线 ✓
 - **V1.5（完成）**: 可视化看板 ✓（Flask + Chart.js，明亮/夜间模式）
 - **V2（完成）**: 打分回测验证 ✓（IC / 五分位 / 命中率，backtest.py）+ PIT 历史打分 ✓（apply_pit_filter，防数据穿越）
+- **V2.5（完成）**: 前端区间选择 ✓（单季度/区间模式切换，自定义 from~to 多季度聚合查看）+ 回测 v2 ✓（灵活时间段输入、自动打分、多季度聚合、结构化报告）
 - **V3**: LLM 读 10-K 做定性分析
 - **V4**: 权重自动优化（基于回测 IC 反向调参）
 
