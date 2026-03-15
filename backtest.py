@@ -15,6 +15,8 @@
   python backtest.py --list
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -22,6 +24,7 @@ import sys
 from bisect import bisect_left
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Optional
 
 # ── 可选依赖（scipy/pandas），未安装时降级到纯 Python 实现 ──────────────
 try:
@@ -67,17 +70,21 @@ def list_scored_quarters() -> list[str]:
     quarters = []
     for d in sorted(SCORES_DIR.iterdir()):
         if d.is_dir() and not d.name.startswith("_"):
-            json_files = list(d.glob("*.json"))
-            # 排除 _开头的文件
-            json_files = [f for f in json_files if not f.name.startswith("_")]
+            json_files = [f for f in d.glob("*.json") if not f.name.startswith("_")]
             if json_files:
                 quarters.append(d.name)
     return quarters
 
 
+def quarters_of_year(year: int) -> list[str]:
+    """返回某年在 scores/ 下存在打分数据的所有季度，升序排列"""
+    prefix = f"{year}-Q"
+    return [q for q in list_scored_quarters() if q.startswith(prefix)]
+
+
 def load_quarter_scores(
     quarter: str, score_key: str,
-    top_n: int | None = None,
+    top_n: Optional[int] = None,
     include_veto: bool = False,
 ) -> list[dict]:
     """
@@ -150,7 +157,7 @@ def build_price_index(price_history: list[dict]) -> tuple[list[str], list[float]
 
 
 def find_price_at(dates: list[str], prices: list[float], target: date,
-                  tolerance_days: int = 10) -> float | None:
+                  tolerance_days: int = 10) -> Optional[float]:
     """
     在有序价格序列中，找最近交易日的价格（±10个交易日内）。
     使用二分查找，优先找 target 当日或之后最近的交易日。
@@ -176,7 +183,7 @@ def compute_forward_return(
     start: date,
     end: date,
     fetcher: DataFetcher,
-) -> float | None:
+) -> Optional[float]:
     """
     计算 start → end 期间股价涨幅（已复权）。
     返回 None 表示数据不足或无法获取。
@@ -398,8 +405,8 @@ def run_backtest(
     quarter: str,
     forward_years: int,
     score_key: str,
-    top_n: int | None,
-    end_date_override: date | None = None,
+    top_n: Optional[int],
+    end_date_override: Optional[date] = None,
     verbose: bool = True,
     include_veto: bool = False,
 ) -> dict:
@@ -504,11 +511,15 @@ def main():
 示例:
   python backtest.py --list
   python backtest.py --quarter 2023-Q1 --forward-years 3
+  python backtest.py --year 2023 --forward-years 3
+  python backtest.py --year 2023 --score-key buffett
   python backtest.py --quarter 2023-Q1 --score-key buffett --top-n 50
   python backtest.py --quarter 2022-Q4 --forward-years 1 --no-save
         """
     )
-    parser.add_argument("--quarter", help="回测季度，如 2023-Q1")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--quarter", help="回测单个季度，如 2023-Q1")
+    scope.add_argument("--year", help="回测整年（汇总该年所有季度），如 2023")
     parser.add_argument("--forward-years", type=float, default=3,
                         help="前瞻年数（默认 3，支持小数如 1.5）")
     parser.add_argument("--score-key", default="composite_score",
@@ -534,21 +545,97 @@ def main():
         if not quarters:
             print("暂无打分数据（scores/ 目录为空）")
         else:
-            print("可回测的季度：")
+            # 按年分组展示
+            from itertools import groupby
+            print("可回测的季度／年度：")
+            year_map: dict[str, list[str]] = {}
             for q in quarters:
-                q_dir = SCORES_DIR / q
-                n = len([f for f in q_dir.glob("*.json") if not f.name.startswith("_")])
-                print(f"  {q}  ({n} 只股票)")
+                y = q.split("-")[0]
+                year_map.setdefault(y, []).append(q)
+            for year, qs in sorted(year_map.items()):
+                total_n = sum(
+                    len([f for f in (SCORES_DIR / q).glob("*.json") if not f.name.startswith("_")])
+                    for q in qs
+                )
+                print(f"  {year}  ({len(qs)} 个季度，共 {total_n} 只·次)")
+                for q in qs:
+                    n = len([f for f in (SCORES_DIR / q).glob("*.json") if not f.name.startswith("_")])
+                    print(f"    {q}  ({n} 只)")
         return
 
+    end_date = date.fromisoformat(args.end_date) if args.end_date else None
+
+    # ── 年度模式 ──────────────────────────────────────────────────────────────
+    if args.year:
+        year = int(args.year)
+        year_quarters = quarters_of_year(year)
+        if not year_quarters:
+            sys.exit(f"[错误] {year} 年暂无打分数据，可用季度：{list_scored_quarters()}")
+
+        print(f"\n[年度模式] {year} 年  共 {len(year_quarters)} 个季度: {year_quarters}")
+        output_dir = Path(args.output_dir) if args.output_dir else (
+            SCORES_DIR / "backtest" / str(year)
+        )
+
+        per_quarter: list[dict] = []
+        all_scores: list[float] = []
+        all_returns: list[float] = []
+
+        for q in year_quarters:
+            print(f"\n{'─' * 45}")
+            result = run_backtest(
+                q, args.forward_years, args.score_key,
+                args.top_n, end_date, verbose=True,
+                include_veto=args.include_veto,
+            )
+            m = result["metrics"]
+            per_quarter.append({"quarter": q, **m})
+            all_scores.extend(r["score"] for r in result["rows"])
+            all_returns.extend(r["forward_return"] for r in result["rows"])
+
+            if not args.no_save:
+                save_report(q, int(m["forward_years"]), args.score_key,
+                            result["rows"], m, output_dir / q)
+
+        # 全年池化指标
+        pooled_ic = spearman_correlation(all_scores, all_returns) if len(all_scores) >= 5 else float("nan")
+        pooled_hr = hit_rate(all_scores, all_returns) if len(all_scores) >= 5 else float("nan")
+        pooled_q  = quintile_analysis(all_scores, all_returns)
+
+        # 打印逐季对比表
+        print("\n" + "=" * 70)
+        print(f"  {year} 年度回测汇总  |  前瞻: {args.forward_years}年  |  依据: {args.score_key}")
+        print("=" * 70)
+        print(f"  {'季度':<10} {'样本':>6} {'IC':>8} {'命中率':>8} {'Q1收益':>9} {'Q5收益':>9} {'超额':>8}")
+        print(f"  {'─'*10} {'─'*6} {'─'*8} {'─'*8} {'─'*9} {'─'*9} {'─'*8}")
+        for r in per_quarter:
+            qs = r["quintiles"]
+            print(f"  {r['quarter']:<10} "
+                  f"{r['n_valid']:>6} "
+                  f"{r['ic']:>+8.4f} "
+                  f"{r['hit_rate']*100:>7.1f}% "
+                  f"{qs.get('Q1',float('nan'))*100:>+8.1f}% "
+                  f"{qs.get('Q5',float('nan'))*100:>+8.1f}% "
+                  f"{qs.get('spread_Q1_Q5',float('nan'))*100:>+7.1f}%")
+        print(f"  {'─'*10} {'─'*6} {'─'*8} {'─'*8} {'─'*9} {'─'*9} {'─'*8}")
+        print(f"  {'全年池化':<10} "
+              f"{len(all_scores):>6} "
+              f"{pooled_ic:>+8.4f} "
+              f"{pooled_hr*100:>7.1f}% "
+              f"{pooled_q.get('Q1',float('nan'))*100:>+8.1f}% "
+              f"{pooled_q.get('Q5',float('nan'))*100:>+8.1f}% "
+              f"{pooled_q.get('spread_Q1_Q5',float('nan'))*100:>+7.1f}%")
+        print("=" * 70)
+        return
+
+    # ── 季度模式 ──────────────────────────────────────────────────────────────
     if not args.quarter:
         quarters = list_scored_quarters()
         if not quarters:
-            sys.exit("[错误] 请用 --quarter 指定季度，或先运行 run_scoring.py 生成打分")
+            sys.exit("[错误] 请用 --quarter 或 --year 指定范围，或先运行 run_scoring.py 生成打分")
         args.quarter = quarters[-1]
         print(f"[自动选择] 使用最新季度: {args.quarter}")
 
-    end_date = date.fromisoformat(args.end_date) if args.end_date else None
     output_dir = Path(args.output_dir) if args.output_dir else (
         SCORES_DIR / args.quarter / "backtest"
     )

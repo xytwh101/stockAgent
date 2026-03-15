@@ -102,11 +102,15 @@ python dashboard.py
 # 列出所有可回测的季度
 python backtest.py --list
 
-# 基础回测：2023-Q1 打分 vs 未来3年实际涨幅
+# 单季度回测：2023-Q1 打分 vs 未来3年实际涨幅
 python backtest.py --quarter 2023-Q1 --forward-years 3
 
-# 验证某一大师维度的预测能力
+# 年度回测：汇总 2023 年所有季度，输出逐季明细 + 全年池化指标
+python backtest.py --year 2023 --forward-years 3
+
+# 验证某一大师维度的预测能力（季度或年度均可）
 python backtest.py --quarter 2023-Q1 --score-key buffett --forward-years 3
+python backtest.py --year 2023 --score-key buffett
 
 # 对比所有打分维度，看哪个维度 IC 最高
 python backtest.py --quarter 2023-Q1 --all-keys
@@ -303,15 +307,28 @@ python fetch_data.py --all --mode core
 
 ## 打分回测验证（backtest.py）
 
+### 两种回测粒度
+
+| 模式 | 参数 | 说明 |
+|------|------|------|
+| **季度模式** | `--quarter 2023-Q1` | 单季度打分 vs 未来 N 年涨幅 |
+| **年度模式** | `--year 2023` | 汇总该年所有季度，输出逐季明细 + 全年池化指标 |
+
+`--quarter` 和 `--year` 互斥；两者均不填时自动选最新季度。
+
 ### 核心逻辑
 
 ```
-历史打分（某季度末）
-  ↓ 以季度末股价为起点
-  ↓ 以 N 年后股价为终点（若超过今天则截止到今天）
-  ↓ 计算每只股票实际涨幅
-预测排名（打分高低）vs 实际排名（涨幅高低）
-  ↓ 输出 IC / 命中率 / 五分位组收益
+季度模式：
+  历史打分（某季度末）→ 以季度末股价为起点
+  → N 年后股价为终点（超过今天则截止到今天）
+  → 计算实际涨幅 → 对比预测排名 vs 实际涨幅排名
+  → 输出 IC / 命中率 / 五分位组收益
+
+年度模式：
+  对该年每个季度分别执行上述流程
+  → 打印逐季对比表（IC / 命中率 / Q1~Q5收益 / 超额）
+  → 合并所有季度数据计算全年池化指标（样本更大，统计更稳健）
 ```
 
 ### 评估指标
@@ -327,11 +344,12 @@ python fetch_data.py --all --mode core
 
 | 参数 | 默认值 | 说明 |
 |------|-------|------|
-| `--quarter` | 最新季度 | 回测哪个季度的打分 |
+| `--quarter` | 最新季度 | 回测单个季度，如 2023-Q1（与 --year 互斥） |
+| `--year` | — | 回测整年，如 2023（与 --quarter 互斥） |
 | `--forward-years` | 3 | 前瞻期（年），支持小数如 1.5 |
 | `--score-key` | composite_score | 排名依据：composite_score / buffett / munger / duan / lynch |
 | `--top-n` | 全部 | 只取高分前 N 只 |
-| `--all-keys` | — | 对所有打分维度逐一回测并汇总对比 |
+| `--all-keys` | — | 对所有打分维度逐一回测并汇总对比（季度模式） |
 | `--include-veto` | — | 包含被否决股票（验证否决规则有效性） |
 | `--end-date` | — | 手动指定终止日期（YYYY-MM-DD） |
 | `--no-save` | — | 不保存报告文件 |
