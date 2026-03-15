@@ -75,6 +75,20 @@ python run_scoring.py
 # 只打指定股票（测试/验证）
 python run_scoring.py --tickers AAPL MSFT GOOGL
 
+# 历史季度打分（自动启用 PIT 过滤，仅用季度末前已发布的数据）
+python run_scoring.py --quarter 2023-Q1 --offline-db
+# 输出：scores/2023-Q1/*.json，JSON 中含 "pit_mode": true, "as_of_date": "2023-03-31"
+
+# 历史年度全量打分（逐季度执行，配合回测使用）
+python run_scoring.py --quarter 2023-Q1 --offline-db
+python run_scoring.py --quarter 2023-Q2 --offline-db
+python run_scoring.py --quarter 2023-Q3 --offline-db
+python run_scoring.py --quarter 2023-Q4 --offline-db
+
+# 离线模式：只用缓存数据（不发任何 API 请求）
+python run_scoring.py --offline-db                   # 所有已缓存 ticker，当前季度
+python run_scoring.py --offline --tickers AAPL MSFT  # 指定 ticker，离线
+
 # 打 A 开头全部美股并输出 Top10
 python run_a_stocks.py
 
