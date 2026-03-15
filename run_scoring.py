@@ -52,7 +52,8 @@ import time
 import traceback
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, date as _date
+from typing import Optional
 
 # 确保项目根目录在 sys.path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -82,6 +83,80 @@ def current_quarter() -> str:
     return f"{now.year}-Q{q}"
 
 
+def quarter_end_date(quarter: str) -> _date:
+    """将 '2023-Q1' 转为该季度末日期 (2023-03-31)"""
+    year_str, q_str = quarter.split("-Q")
+    year = int(year_str)
+    q = int(q_str)
+    end_month = q * 3
+    if end_month in (3, 12):
+        end_day = 31
+    elif end_month in (6, 9):
+        end_day = 30
+    else:
+        end_day = 31
+    return _date(year, end_month, end_day)
+
+
+# ─────────────────────────────────────────────
+# Point-in-Time 过滤
+# ─────────────────────────────────────────────
+
+def apply_pit_filter(raw: dict, as_of: _date) -> dict:
+    """
+    Point-in-Time 过滤：仅保留 as_of 日期之前已发布的财务数据。
+
+    用于历史季度回测，避免未来数据穿越。
+    - 对所有含 date 字段的列表型数据按 as_of 截断
+    - 用最近可用年度数据替换 TTM 数据（历史近似值）
+    - 返回过滤后的新 raw dict（不修改原始 dict）
+    """
+    as_of_str = as_of.isoformat()
+    filtered = dict(raw)
+
+    # 含 date 字段的列表型数据，按 as_of 截断
+    date_list_keys = [
+        "income_annual", "balance_annual", "cashflow_annual",
+        "key_metrics_annual", "ratios_annual",
+        "income_quarterly", "balance_quarterly", "cashflow_quarterly",
+        "income_growth", "ev_annual", "earnings_history", "insider_trading",
+    ]
+    for key in date_list_keys:
+        lst = raw.get(key)
+        if isinstance(lst, list):
+            filtered[key] = [
+                item for item in lst
+                if isinstance(item, dict) and item.get("date", "9999") <= as_of_str
+            ]
+
+    # 用最近可用的年度数据替换 TTM（历史近似）
+    # ratios_annual[0] → ratios_ttm 代理
+    ratios_ann = filtered.get("ratios_annual", [])
+    if ratios_ann:
+        r = ratios_ann[0]
+        filtered["ratios_ttm"] = {
+            "priceToEarningsRatioTTM":       r.get("priceEarningsRatio"),
+            "priceToBookRatioTTM":           r.get("priceToBookRatio"),
+            "priceToSalesRatioTTM":          r.get("priceToSalesRatio"),
+            "priceToEarningsGrowthRatioTTM": r.get("priceEarningsToGrowthRatio"),
+        }
+    else:
+        filtered["ratios_ttm"] = {}
+
+    # key_metrics_annual[0] → key_metrics_ttm 代理
+    km_ann = filtered.get("key_metrics_annual", [])
+    if km_ann:
+        km = km_ann[0]
+        filtered["key_metrics_ttm"] = {
+            "evToEBITDATTM":        km.get("evToEbitda"),
+            "freeCashFlowYieldTTM": km.get("freeCashFlowYield"),
+        }
+    else:
+        filtered["key_metrics_ttm"] = {}
+
+    return filtered
+
+
 # ─────────────────────────────────────────────
 # 输出目录管理
 # ─────────────────────────────────────────────
@@ -104,40 +179,52 @@ def score_ticker(
     master_scorer: MasterScorer,
     veto_engine: VetoEngine,
     quarter: str,
+    as_of_date: Optional[_date] = None,
 ) -> dict | None:
-    """对单只股票完整打分，返回结果 dict"""
+    """
+    对单只股票完整打分，返回结果 dict。
+
+    as_of_date: 若指定（历史季度），启用 PIT 过滤，仅使用该日期前已发布的数据。
+                若为 None（当前季度），使用全量最新数据。
+    """
     try:
         # 1. 获取数据
         raw = fetcher.get_all_financial_data(ticker)
 
-        # 2. 退市 / 实质停止交易过滤（raw 中已含 profile 和 income_annual，零额外调用）
-        profile = raw.get("profile", {})
-        # 注意：不能用 `not profile.get("isActivelyTrading", True)`——
-        # 当字段存在但值为 null（Python None）时，not None = True 会误杀正常股票。
-        is_active = profile.get("isActivelyTrading")
-        if is_active is not None and not bool(is_active):
-            print(f"  [跳过] {ticker}: 已退市 (isActivelyTrading=False)")
-            return None
-        if float(profile.get("price") or 0) == 0:
-            print(f"  [跳过] {ticker}: 报价为0，实质停止交易")
-            return None
+        # 2. PIT 过滤（历史季度）
+        if as_of_date is not None:
+            raw = apply_pit_filter(raw, as_of_date)
 
-        # 年报日期检查：最新年报距今超过 18 个月视为数据过期（壳公司/停报）
+        # 3. 退市 / 实质停止交易过滤
+        # 注意：历史打分时跳过退市检查（当时可能是活跃股），仅在当前打分时过滤
+        if as_of_date is None:
+            profile = raw.get("profile", {})
+            # 注意：不能用 `not profile.get("isActivelyTrading", True)`——
+            # 当字段存在但值为 null（Python None）时，not None = True 会误杀正常股票。
+            is_active = profile.get("isActivelyTrading")
+            if is_active is not None and not bool(is_active):
+                print(f"  [跳过] {ticker}: 已退市 (isActivelyTrading=False)")
+                return None
+            if float(profile.get("price") or 0) == 0:
+                print(f"  [跳过] {ticker}: 报价为0，实质停止交易")
+                return None
+
+        # 年报日期检查：最新年报距参考日超过 18 个月视为数据过期（壳公司/停报）
+        ref_date = as_of_date or datetime.now().date()
         income_stmts = raw.get("income_annual", [])
         if income_stmts:
             latest_date = income_stmts[0].get("date", "")
             if latest_date:
                 try:
-                    from datetime import date as _date
                     report_date = _date.fromisoformat(latest_date[:10])
-                    months_ago = (datetime.now().date() - report_date).days / 30
+                    months_ago = (ref_date - report_date).days / 30
                     if months_ago > 18:
                         print(f"  [跳过] {ticker}: 最新年报 {latest_date[:10]} 已超过18个月")
                         return None
                 except ValueError:
                     pass
 
-        # 3. 标准化
+        # 4. 标准化
         fin = normalizer.normalize(raw)
 
         if fin.years_of_data < 2:
@@ -170,6 +257,8 @@ def score_ticker(
             "ticker": ticker,
             "scored_at": datetime.now().isoformat(),
             "quarter": quarter,
+            "pit_mode": as_of_date is not None,
+            "as_of_date": as_of_date.isoformat() if as_of_date else None,
             "composite_score": round(composite, 4),
             "veto_triggered": veto_triggered,
             "veto_reasons": all_vetoes,
@@ -315,10 +404,17 @@ def run_offline_cached(
         所有打分成功的结果列表（同时写入 JSON 和汇总 CSV）
     """
     quarter = quarter or current_quarter()
+
+    # 自动检测历史季度，启用 PIT 过滤
+    q_end = quarter_end_date(quarter)
+    today = _date.today()
+    as_of_date: Optional[_date] = q_end if q_end < today else None
+    pit_tag = f"  [PIT as_of={q_end}]" if as_of_date else ""
+
     out_dir = ensure_output_dir(quarter)
 
     print(f"\n{'='*60}")
-    print(f"  离线打分（仅缓存数据）— {quarter}  [workers={workers}]")
+    print(f"  离线打分（仅缓存数据）— {quarter}  [workers={workers}]{pit_tag}")
     print(f"  输出目录: {out_dir}")
     print(f"{'='*60}\n")
 
@@ -377,7 +473,7 @@ def run_offline_cached(
 
         def score_one(ticker: str) -> tuple[str, dict | None]:
             f, norm, dim_s, mstr_s, veto = get_thread_components()
-            result = score_ticker(ticker, f, norm, dim_s, mstr_s, veto, quarter)
+            result = score_ticker(ticker, f, norm, dim_s, mstr_s, veto, quarter, as_of_date)
             # 文件写入在线程内完成，避免占用 print_lock
             if result:
                 save_ticker_result(result, out_dir)
@@ -468,12 +564,19 @@ def main():
         return
 
     quarter = args.quarter or current_quarter()
+
+    # 自动检测历史季度：若季度末日期早于今天，启用 PIT 模式（防数据穿越）
+    q_end = quarter_end_date(quarter)
+    today = _date.today()
+    as_of_date: Optional[_date] = q_end if q_end < today else None
+    pit_tag = f"  [PIT as_of={q_end}]" if as_of_date else ""
+
     out_dir = ensure_output_dir(quarter)
     log_path = os.path.join(out_dir, OUTPUT_CONFIG["run_log_filename"])
 
     net_tag = "离线(缓存)" if args.offline else "在线"
     print(f"\n{'='*60}")
-    print(f"  投资大师选股系统 — {quarter}  [{net_tag}]")
+    print(f"  投资大师选股系统 — {quarter}  [{net_tag}]{pit_tag}")
     print(f"  输出目录: {out_dir}")
     print(f"{'='*60}\n")
 
@@ -547,7 +650,7 @@ def main():
 
             result = score_ticker(
                 ticker, fetcher, normalizer, dim_scorer,
-                master_scorer, veto_engine, quarter
+                master_scorer, veto_engine, quarter, as_of_date
             )
 
             if result:

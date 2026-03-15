@@ -75,6 +75,20 @@ python run_scoring.py
 # 只打指定股票（测试/验证）
 python run_scoring.py --tickers AAPL MSFT GOOGL
 
+# 历史季度打分（自动启用 PIT 过滤，仅用季度末前已发布的数据）
+python run_scoring.py --quarter 2023-Q1 --offline-db
+# 输出：scores/2023-Q1/*.json，JSON 中含 "pit_mode": true, "as_of_date": "2023-03-31"
+
+# 历史年度全量打分（逐季度执行，配合回测使用）
+python run_scoring.py --quarter 2023-Q1 --offline-db
+python run_scoring.py --quarter 2023-Q2 --offline-db
+python run_scoring.py --quarter 2023-Q3 --offline-db
+python run_scoring.py --quarter 2023-Q4 --offline-db
+
+# 离线模式：只用缓存数据（不发任何 API 请求）
+python run_scoring.py --offline-db                   # 所有已缓存 ticker，当前季度
+python run_scoring.py --offline --tickers AAPL MSFT  # 指定 ticker，离线
+
 # 打 A 开头全部美股并输出 Top10
 python run_a_stocks.py
 
@@ -217,6 +231,30 @@ if is_active is not None and not bool(is_active):
 - 长期负债/FCF > 10
 - 近1年内部人减持 > 30%
 - 审计非标准意见
+
+### Point-in-Time (PIT) 历史打分
+
+**问题**：用当前数据给历史季度打分会产生数据穿越（用了未来才有的财报）。
+
+**解法**：`run_scoring.py` 在打历史季度时自动启用 PIT 过滤：
+- 自动检测：`quarter_end_date < today` → 启用 PIT 模式
+- `apply_pit_filter(raw, as_of_date)` 按季度末日期截断所有含 `date` 字段的列表型数据
+- TTM 估值用最近可用年度数据近似替代（`ratios_annual[0]` / `key_metrics_annual[0]`）
+- 年报过期检查基准日改为 `as_of_date`（不用 today）
+- 退市检查仅在当前打分时执行（历史时该股票可能是活跃的）
+
+**TTM 字段映射（历史近似）**：
+
+| TTM 字段 | 来源（ratios_annual[0]） |
+|---------|------------------------|
+| `priceToEarningsRatioTTM` | `priceEarningsRatio` |
+| `priceToBookRatioTTM` | `priceToBookRatio` |
+| `priceToSalesRatioTTM` | `priceToSalesRatio` |
+| `priceToEarningsGrowthRatioTTM` | `priceEarningsToGrowthRatio` |
+| `evToEBITDATTM` | `evToEbitda`（key_metrics_annual[0]） |
+| `freeCashFlowYieldTTM` | `freeCashFlowYield`（key_metrics_annual[0]） |
+
+打分 JSON 中会写入 `"pit_mode": true` 和 `"as_of_date": "2023-03-31"` 供回测引用。
 
 ---
 
@@ -365,7 +403,7 @@ python fetch_data.py --all --mode core
 
 - **V1（完成）**: 跑通打分流水线 ✓
 - **V1.5（完成）**: 可视化看板 ✓（Flask + Chart.js，明亮/夜间模式）
-- **V2（完成）**: 打分回测验证 ✓（IC / 五分位 / 命中率，backtest.py）
+- **V2（完成）**: 打分回测验证 ✓（IC / 五分位 / 命中率，backtest.py）+ PIT 历史打分 ✓（apply_pit_filter，防数据穿越）
 - **V3**: LLM 读 10-K 做定性分析
 - **V4**: 权重自动优化（基于回测 IC 反向调参）
 
@@ -381,5 +419,5 @@ python fetch_data.py --all --mode core
 6. **`stable/search-symbol`** 是当前唯一可用的股票搜索端点，已缓存 A 股列表（key: `a_stocks:list`）。
 7. **拉取与打分分离**：推荐先用 `fetch_data.py` 把数据拉进缓存，再跑 `run_scoring.py`。打分时若数据已在缓存则不会发出任何网络请求。
 8. **cache_key 格式**：`{type}:{TICKER}`，如 `income_annual:AAPL`、`ratios_ttm:AAPL`。每个端点对应固定 key，见 `fetch_data.py` 中的 `_CACHE_KEY_PREFIX`。
-9. **回测的 Point-in-Time 问题**：`backtest.py` 直接用打分 JSON 中的分数，不重新计算，天然避免未来数据泄漏。股价涨幅以季度末收盘价为起点，需确保 `price_daily` 缓存覆盖该日期。
+9. **Point-in-Time 打分**：`run_scoring.py` 对历史季度（季度末 < 今天）自动启用 PIT 过滤，仅用该季度末之前已发布的财务数据打分，不产生数据穿越。`backtest.py` 直接读取打分 JSON 中的分数，无需重新计算。股价涨幅以季度末收盘价为起点，需确保 `price_daily` 缓存覆盖该日期。
 10. **回测有效性条件**：至少需要 5 只股票有完整价格数据才计算 IC；五分位分析至少需要 5 只（每组 1 只）。样本太少时指标不具统计意义。
