@@ -181,6 +181,7 @@ body { background: var(--bg); color: var(--txt); font-family: -apple-system, Bli
       <div class="sort-bar">
         <button class="sort-btn active" id="btnScore" onclick="setSort('score')">得分 ↓</button>
         <button class="sort-btn" id="btnMktcap" onclick="setSort('mktcap')">市值 ↓</button>
+        <button class="sort-btn active" id="btnHideVeto" onclick="toggleHideVeto()" title="隐藏被否决的股票">隐藏否决</button>
         <span class="stock-count" id="stockCount">-</span>
       </div>
     </div>
@@ -232,6 +233,7 @@ const S = {
   rangeQuarters: [],        // range mode: selected quarters list
   allQuarters: [],          // all available quarters (sorted asc)
   sort: 'score', query: '', charts: {},
+  hideVeto: true,
 };
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -350,10 +352,17 @@ async function loadStocks() {
 
 function onSearch(q) { S.query = q.toLowerCase(); applyFilter(); }
 
+function toggleHideVeto() {
+  S.hideVeto = !S.hideVeto;
+  $('btnHideVeto').classList.toggle('active', S.hideVeto);
+  applyFilter();
+}
+
 function applyFilter() {
-  S.filtered = S.query
-    ? S.stocks.filter(s => s.ticker.toLowerCase().includes(S.query) || (s.company_info?.name||'').toLowerCase().includes(S.query))
-    : [...S.stocks];
+  let list = S.stocks;
+  if (S.hideVeto) list = list.filter(s => !s.veto_triggered);
+  if (S.query) list = list.filter(s => s.ticker.toLowerCase().includes(S.query) || (s.company_info?.name||'').toLowerCase().includes(S.query));
+  S.filtered = list;
   applySort(false);
 }
 
