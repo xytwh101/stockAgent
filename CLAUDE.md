@@ -116,24 +116,32 @@ python dashboard.py
 # 列出所有可回测的季度
 python backtest.py --list
 
-# 单季度回测：2023-Q1 打分 vs 未来3年实际涨幅
-python backtest.py --quarter 2023-Q1 --forward-years 3
+# 基本用法：指定打分时段 + 评估时段
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1
 
-# 年度回测：汇总 2023 年所有季度，输出逐季明细 + 全年池化指标
-python backtest.py --year 2023 --forward-years 3
+# 年度打分 vs 年度评估（自动展开为4个季度）
+python backtest.py --score-period 2023 --eval-period 2024
 
-# 验证某一大师维度的预测能力（季度或年度均可）
-python backtest.py --quarter 2023-Q1 --score-key buffett --forward-years 3
-python backtest.py --year 2023 --score-key buffett
+# 多年打分范围（逗号分隔 = 空格分隔）
+python backtest.py --score-period 2023,2024 --eval-period 2025-Q2
 
-# 对比所有打分维度，看哪个维度 IC 最高
-python backtest.py --quarter 2023-Q1 --all-keys
+# 验证某一大师维度
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --score-key buffett
 
-# 验证否决规则（被否决股票是否真的跑输）
-python backtest.py --quarter 2023-Q1 --include-veto
+# 对比所有打分维度 IC
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --all-keys
 
-# 只看 Top N 高分股的区分度
-python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
+# 包含否决股验证否决规则有效性
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --include-veto
+
+# 多季度聚合方式：等权平均(默认) / 取最新
+python backtest.py --score-period 2023 --eval-period 2024 --agg-mode latest
+
+# 不自动打分（仅用已有数据）
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --no-auto-score
+
+# 强制重新打分
+python backtest.py --score-period 2023-Q1 --eval-period 2024-Q1 --fresh-score
 ```
 
 ---
@@ -345,29 +353,37 @@ python fetch_data.py --all --mode core
 
 ## 打分回测验证（backtest.py）
 
-### 两种回测粒度
+### 核心概念
 
-| 模式 | 参数 | 说明 |
-|------|------|------|
-| **季度模式** | `--quarter 2023-Q1` | 单季度打分 vs 未来 N 年涨幅 |
-| **年度模式** | `--year 2023` | 汇总该年所有季度，输出逐季明细 + 全年池化指标 |
+用 **打分时段** 的评分，验证 **评估时段** 的实际涨幅是否与打分排名一致。
 
-`--quarter` 和 `--year` 互斥；两者均不填时自动选最新季度。
+### 时间段输入格式
+
+| 格式 | 示例 | 展开结果 |
+|------|------|---------|
+| 单季度 | `2023-Q1` | `['2023-Q1']` |
+| 多季度 | `"2023-Q1 2023-Q2"` | `['2023-Q1', '2023-Q2']` |
+| 单年 | `2023` | `['2023-Q1', ..., '2023-Q4']` |
+| 多年 | `"2023 2024"` 或 `2023,2024` | `['2023-Q1', ..., '2024-Q4']` |
+| 混合 | `"2023 2024-Q1"` | `['2023-Q1', ..., '2023-Q4', '2024-Q1']` |
 
 ### 核心逻辑
 
 ```
-季度模式：
-  历史打分（某季度末）→ 以季度末股价为起点
-  → N 年后股价为终点（超过今天则截止到今天）
-  → 计算实际涨幅 → 对比预测排名 vs 实际涨幅排名
-  → 输出 IC / 命中率 / 五分位组收益
-
-年度模式：
-  对该年每个季度分别执行上述流程
-  → 打印逐季对比表（IC / 命中率 / Q1~Q5收益 / 超额）
-  → 合并所有季度数据计算全年池化指标（样本更大，统计更稳健）
+1. 解析打分时段 + 评估时段 → 季度列表
+2. 自动打分（若尚未打分，调用 run_scoring.py 离线打分）
+3. 聚合多季度打分（默认等权平均 | 可选取最新）
+4. 以打分时段末尾 → 评估时段末尾的股价涨幅计算实际收益
+5. 计算 IC / 命中率 / 五分位组收益
+6. 输出报告：整体评估 → 个股明细
 ```
+
+### 多季度聚合方式
+
+| 模式 | `--agg-mode` | 说明 |
+|------|-------------|------|
+| 等权平均（默认） | `quarter_weighted` | 多个季度的分数取平均 |
+| 取最新 | `latest` | 用最新季度的分数 |
 
 ### 评估指标
 
@@ -378,24 +394,45 @@ python fetch_data.py --all --mode core
 | **五分位组收益** | Q1（高分）到 Q5（低分）各组平均涨幅 | Q1 > Q5 说明区分度好 |
 | **Q1-Q5 年化超额** | 高低分位收益差 / 前瞻年数 | 正值且显著为佳 |
 
+### 报告输出结构
+
+```
+[总体评估]
+  评级: 优秀/良好/有效/较弱/无效
+  说明: 一句话评价
+
+[核心指标]
+  IC / 命中率 / 有效样本数 / 前瞻期
+
+[五分位组收益]
+  Q1~Q5 各组总收益 + 年化收益
+
+[个股明细]
+  Top 20 高分股 / Bottom 10 低分股
+  最大赢家 Top 5 / 最大输家 Bottom 5
+  多季度得分趋势（聚合模式时）
+```
+
 ### 命令行参数
 
 | 参数 | 默认值 | 说明 |
 |------|-------|------|
-| `--quarter` | 最新季度 | 回测单个季度，如 2023-Q1（与 --year 互斥） |
-| `--year` | — | 回测整年，如 2023（与 --quarter 互斥） |
-| `--forward-years` | 3 | 前瞻期（年），支持小数如 1.5 |
+| `--score-period` | 最新季度 | 打分时段 (支持季度/年/混合格式) |
+| `--eval-period` | 必填 | 评估时段 (必须晚于打分时段) |
 | `--score-key` | composite_score | 排名依据：composite_score / buffett / munger / duan / lynch |
+| `--agg-mode` | quarter_weighted | 多季度聚合：quarter_weighted / latest |
 | `--top-n` | 全部 | 只取高分前 N 只 |
-| `--all-keys` | — | 对所有打分维度逐一回测并汇总对比（季度模式） |
-| `--include-veto` | — | 包含被否决股票（验证否决规则有效性） |
-| `--end-date` | — | 手动指定终止日期（YYYY-MM-DD） |
+| `--all-keys` | — | 对所有打分维度逐一回测并对比 |
+| `--include-veto` | — | 包含被否决股票 |
+| `--no-auto-score` | — | 不自动打分，仅用已有数据 |
+| `--fresh-score` | — | 强制重新打分 |
 | `--no-save` | — | 不保存报告文件 |
 
 ### 前提条件
 
 需要历史价格数据（`price_daily:{ticker}` 缓存 TTL 7 天）。
 建议先运行 `fetch_data.py --all --mode full` 将价格写入缓存，回测时不发出额外网络请求。
+打分会自动执行（调用 `run_offline_cached`），也可用 `--no-auto-score` 跳过。
 
 ---
 
