@@ -98,7 +98,7 @@ class FilterFunnel:
 
     def stage1_filter(self, tickers: list[str]) -> list[str]:
         """
-        第一道：基础过滤（市值/日均成交/上市年限）
+        第一道：基础过滤（退市状态/市值/日均成交/上市年限）
         数据来源：profile（缓存30天），快速，API调用少
         """
         from datetime import datetime
@@ -113,9 +113,20 @@ class FilterFunnel:
                 if not profile:
                     continue
 
+                # 退市过滤（零额外 API 调用，profile 已在此获取）：
+                #   1. isActivelyTrading = False — 官方退市标记
+                #   2. price = 0               — 没有报价，实质停止交易
+                # 注意：不用 `not profile.get("isActivelyTrading", True)`，
+                # 当字段值为 null（Python None）时，not None = True 会误杀正常股票。
+                is_active = profile.get("isActivelyTrading")
+                if is_active is not None and not bool(is_active):
+                    continue
+                price = float(profile.get("price") or 0)
+                if price == 0:
+                    continue
+
                 mktcap = float(profile.get("marketCap", profile.get("mktCap")) or 0)
                 vol_avg = float(profile.get("averageVolume", profile.get("volAvg")) or 0)
-                price = float(profile.get("price") or 0)
                 avg_vol_usd = vol_avg * price
 
                 # 市值过滤

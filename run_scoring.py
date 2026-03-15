@@ -110,19 +110,46 @@ def score_ticker(
         # 1. 获取数据
         raw = fetcher.get_all_financial_data(ticker)
 
-        # 2. 标准化
+        # 2. 退市 / 实质停止交易过滤（raw 中已含 profile 和 income_annual，零额外调用）
+        profile = raw.get("profile", {})
+        # 注意：不能用 `not profile.get("isActivelyTrading", True)`——
+        # 当字段存在但值为 null（Python None）时，not None = True 会误杀正常股票。
+        is_active = profile.get("isActivelyTrading")
+        if is_active is not None and not bool(is_active):
+            print(f"  [跳过] {ticker}: 已退市 (isActivelyTrading=False)")
+            return None
+        if float(profile.get("price") or 0) == 0:
+            print(f"  [跳过] {ticker}: 报价为0，实质停止交易")
+            return None
+
+        # 年报日期检查：最新年报距今超过 18 个月视为数据过期（壳公司/停报）
+        income_stmts = raw.get("income_annual", [])
+        if income_stmts:
+            latest_date = income_stmts[0].get("date", "")
+            if latest_date:
+                try:
+                    from datetime import date as _date
+                    report_date = _date.fromisoformat(latest_date[:10])
+                    months_ago = (datetime.now().date() - report_date).days / 30
+                    if months_ago > 18:
+                        print(f"  [跳过] {ticker}: 最新年报 {latest_date[:10]} 已超过18个月")
+                        return None
+                except ValueError:
+                    pass
+
+        # 3. 标准化
         fin = normalizer.normalize(raw)
 
         if fin.years_of_data < 2:
             return None
 
-        # 3. 全局否决检查
+        # 5. 全局否决检查
         global_vetoes = veto_engine.check(fin)
 
-        # 4. 五维打分
+        # 6. 五维打分
         dim_scores = dim_scorer.score_all(fin)
 
-        # 5. 大师得分 + 大师特定否决
+        # 7. 大师得分 + 大师特定否决
         master_scores = {}
         master_vetoes = []
         for master_name, master_module in MASTERS.items():
@@ -132,7 +159,7 @@ def score_ticker(
         all_vetoes = global_vetoes + master_vetoes
         veto_triggered = len(all_vetoes) > 0
 
-        # 6. 综合得分（默认权重加权）
+        # 8. 综合得分（默认权重加权）
         from config import DIMENSION_WEIGHTS
         composite = sum(
             DIMENSION_WEIGHTS[dim] * dim_scores.get(dim, 0)

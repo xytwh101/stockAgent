@@ -191,6 +191,9 @@ class CountingFetcher:
     def get_ticker_universe(self):
         return self._fetcher.get_ticker_universe()
 
+    def is_delisted(self, ticker: str) -> bool:
+        return self._fetcher.is_delisted(ticker)
+
     def get_all_cached_tickers(self) -> list[str]:
         """返回数据库中所有已出现过的 ticker（不论是否过期）"""
         rows = self.conn.execute("SELECT DISTINCT cache_key FROM cache").fetchall()
@@ -218,6 +221,13 @@ def fetch_ticker(
     返回 (api_calls_made, endpoints_skipped)
     """
     sym = ticker.upper()
+
+    # 退市过滤：先确保 profile 已拉取（profile 是最轻量的端点），
+    # 若 isActivelyTrading=False 则跳过所有其他端点。
+    if not dry_run and fetcher.is_delisted(sym):
+        print(f"  [跳过] {sym}: 已退市")
+        return 0, len(endpoints)
+
     missing = missing_endpoints(fetcher.conn, sym, endpoints)
     skipped = len(endpoints) - len(missing)
 
