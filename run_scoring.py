@@ -110,19 +110,25 @@ def score_ticker(
         # 1. 获取数据
         raw = fetcher.get_all_financial_data(ticker)
 
-        # 2. 标准化
+        # 2. 退市过滤（profile 已在 raw 中，零额外 API 调用）
+        profile = raw.get("profile", {})
+        if not profile.get("isActivelyTrading", True):
+            print(f"  [跳过] {ticker}: 已退市 (isActivelyTrading=False)")
+            return None
+
+        # 3. 标准化
         fin = normalizer.normalize(raw)
 
         if fin.years_of_data < 2:
             return None
 
-        # 3. 全局否决检查
+        # 5. 全局否决检查
         global_vetoes = veto_engine.check(fin)
 
-        # 4. 五维打分
+        # 6. 五维打分
         dim_scores = dim_scorer.score_all(fin)
 
-        # 5. 大师得分 + 大师特定否决
+        # 7. 大师得分 + 大师特定否决
         master_scores = {}
         master_vetoes = []
         for master_name, master_module in MASTERS.items():

@@ -98,7 +98,7 @@ class FilterFunnel:
 
     def stage1_filter(self, tickers: list[str]) -> list[str]:
         """
-        第一道：基础过滤（市值/日均成交/上市年限）
+        第一道：基础过滤（退市状态/市值/日均成交/上市年限）
         数据来源：profile（缓存30天），快速，API调用少
         """
         from datetime import datetime
@@ -111,6 +111,10 @@ class FilterFunnel:
             try:
                 profile = self.fetcher.get_profile(ticker)
                 if not profile:
+                    continue
+
+                # 退市过滤：isActivelyTrading = False 表示已退市，零额外 API 调用
+                if not profile.get("isActivelyTrading", True):
                     continue
 
                 mktcap = float(profile.get("marketCap", profile.get("mktCap")) or 0)

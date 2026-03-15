@@ -198,6 +198,20 @@ class DataFetcher:
             self._cache_set(cache_key, result, CACHE_CONFIG["universe_ttl_days"])
         return result
 
+    def is_delisted(self, ticker: str) -> bool:
+        """
+        判断股票是否已退市。
+        依据 FMP profile 中的 isActivelyTrading 字段（False = 已退市）。
+        Profile 已有缓存时零额外 API 调用；字段缺失时保守处理（不过滤）。
+        """
+        profile = self.get_profile(ticker)
+        if not profile:
+            return True  # 拉不到 profile，视为无效/已退市
+        is_active = profile.get("isActivelyTrading")
+        if is_active is None:
+            return False  # 字段缺失时不误杀
+        return not bool(is_active)
+
     # ─────────────────────────────────────────────
     # 二、历史价格（最多 20 年日线）
     # ─────────────────────────────────────────────

@@ -165,7 +165,7 @@ python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 
 ```
 全量股票（~6000）
-  ↓ Stage1: 市值>$3亿 + 日均成交>$50万 + 上市>3年 + 交易所[NYSE/NASDAQ/AMEX]
+  ↓ Stage1: 退市过滤(isActivelyTrading) + 市值>$3亿 + 日均成交>$50万 + 上市>3年 + 交易所[NYSE/NASDAQ/AMEX]
 ~2500只
   ↓ Stage2: 过去3年至少2年盈利 + 总负债/总资产<85%
 ~1500只
@@ -333,7 +333,8 @@ python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 
 ## 注意事项
 
-1. **API Key** 在 `.env` 中，不提交 git。`.env.example` 中有示例。
+1. **退市过滤**：依据 FMP profile 中的 `isActivelyTrading` 字段（`False` = 已退市）。在三处生效：Stage1 漏斗（全量模式）、`score_ticker()`（指定 ticker 模式）、`fetch_ticker()`（数据拉取）。Profile 已缓存时零额外 API 调用；字段缺失时保守处理（不过滤）。
+2. **API Key** 在 `.env` 中，不提交 git。`.env.example` 中有示例。
 2. **断点续跑**：`run_checkpoints` 表记录已打分的 `(quarter, ticker)`，重启不会重复打分。用 `--fresh` 参数强制重跑。
 3. **ETF/基金过滤**：通过 Stage1 市值+流动性过滤，大多数 ETF 会被筛掉。
 4. **missing_valuation_ttm**：TTM 估值数据缺失时打分时估值维度得 0 分，JSON 中标记 `data_quality_flags`。
