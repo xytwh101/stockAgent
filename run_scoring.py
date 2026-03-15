@@ -110,11 +110,29 @@ def score_ticker(
         # 1. 获取数据
         raw = fetcher.get_all_financial_data(ticker)
 
-        # 2. 退市过滤（profile 已在 raw 中，零额外 API 调用）
+        # 2. 退市 / 实质停止交易过滤（raw 中已含 profile 和 income_annual，零额外调用）
         profile = raw.get("profile", {})
         if not profile.get("isActivelyTrading", True):
             print(f"  [跳过] {ticker}: 已退市 (isActivelyTrading=False)")
             return None
+        if float(profile.get("price") or 0) == 0:
+            print(f"  [跳过] {ticker}: 报价为0，实质停止交易")
+            return None
+
+        # 年报日期检查：最新年报距今超过 18 个月视为数据过期（壳公司/停报）
+        income_stmts = raw.get("income_annual", [])
+        if income_stmts:
+            latest_date = income_stmts[0].get("date", "")
+            if latest_date:
+                try:
+                    from datetime import date as _date
+                    report_date = _date.fromisoformat(latest_date[:10])
+                    months_ago = (datetime.now().date() - report_date).days / 30
+                    if months_ago > 18:
+                        print(f"  [跳过] {ticker}: 最新年报 {latest_date[:10]} 已超过18个月")
+                        return None
+                except ValueError:
+                    pass
 
         # 3. 标准化
         fin = normalizer.normalize(raw)

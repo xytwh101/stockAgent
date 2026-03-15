@@ -113,13 +113,17 @@ class FilterFunnel:
                 if not profile:
                     continue
 
-                # 退市过滤：isActivelyTrading = False 表示已退市，零额外 API 调用
+                # 退市过滤（零额外 API 调用，profile 已在此获取）：
+                #   1. isActivelyTrading = False — 官方退市标记
+                #   2. price = 0               — 没有报价，实质停止交易
                 if not profile.get("isActivelyTrading", True):
+                    continue
+                price = float(profile.get("price") or 0)
+                if price == 0:
                     continue
 
                 mktcap = float(profile.get("marketCap", profile.get("mktCap")) or 0)
                 vol_avg = float(profile.get("averageVolume", profile.get("volAvg")) or 0)
-                price = float(profile.get("price") or 0)
                 avg_vol_usd = vol_avg * price
 
                 # 市值过滤
