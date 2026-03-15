@@ -11,12 +11,18 @@ duan.py — 段永平大师配置
 - 10年后行业是否仍存在且公司仍领先
 - 估值权重为 0%（段永平明确表示不依赖估值指标选股）
 """
-from config import MASTER_WEIGHTS
+from config import MASTER_WEIGHTS, SCORING_VERSION
 from src.normalizer import NormalizedFinancials
 
 
 NAME = "duan"
 WEIGHTS = MASTER_WEIGHTS["duan"]
+
+def _get_weights():
+    if SCORING_VERSION == "v2":
+        from config import V2_MASTER_WEIGHTS
+        return V2_MASTER_WEIGHTS["duan"]
+    return WEIGHTS
 
 # 段永平额外否决项
 EXTRA_VETO_RULES = {
@@ -48,4 +54,5 @@ def apply_weights(dim_scores: dict[str, float]) -> float:
     按段永平权重矩阵加权计算总分
     注意：估值权重为 0，完全不考虑当前估值
     """
-    return round(sum(WEIGHTS[dim] * dim_scores.get(dim, 0) for dim in WEIGHTS), 4)
+    w = _get_weights()
+    return round(sum(w[dim] * dim_scores.get(dim, 0) for dim in w), 4)

@@ -12,12 +12,18 @@ lynch.py — 彼得·林奇大师配置
 - 内部人近期增持 → 额外加分信号
 - 优先关注：快速增长型 + 困境反转型
 """
-from config import MASTER_WEIGHTS
+from config import MASTER_WEIGHTS, SCORING_VERSION
 from src.normalizer import NormalizedFinancials
 
 
 NAME = "lynch"
 WEIGHTS = MASTER_WEIGHTS["lynch"]
+
+def _get_weights():
+    if SCORING_VERSION == "v2":
+        from config import V2_MASTER_WEIGHTS
+        return V2_MASTER_WEIGHTS["lynch"]
+    return WEIGHTS
 
 # 林奇额外否决项
 EXTRA_VETO_RULES = {
@@ -50,4 +56,5 @@ def extra_vetoes(fin: NormalizedFinancials) -> list[str]:
 
 def apply_weights(dim_scores: dict[str, float]) -> float:
     """按林奇权重矩阵加权计算总分（成长性权重最高40%）"""
-    return round(sum(WEIGHTS[dim] * dim_scores.get(dim, 0) for dim in WEIGHTS), 4)
+    w = _get_weights()
+    return round(sum(w[dim] * dim_scores.get(dim, 0) for dim in w), 4)

@@ -10,12 +10,18 @@ buffett.py — 巴菲特大师配置
 - 资本支出/净利润 < 25% → 轻资产
 - FCF/净利润 > 0.8 → 利润质量高
 """
-from config import MASTER_WEIGHTS
+from config import MASTER_WEIGHTS, SCORING_VERSION
 from src.normalizer import NormalizedFinancials
 
 
 NAME = "buffett"
 WEIGHTS = MASTER_WEIGHTS["buffett"]
+
+def _get_weights():
+    if SCORING_VERSION == "v2":
+        from config import V2_MASTER_WEIGHTS
+        return V2_MASTER_WEIGHTS["buffett"]
+    return WEIGHTS
 
 # 巴菲特额外否决项（在全局否决之上）
 EXTRA_VETO_RULES = {
@@ -41,4 +47,5 @@ def extra_vetoes(fin: NormalizedFinancials) -> list[str]:
 
 def apply_weights(dim_scores: dict[str, float]) -> float:
     """按巴菲特权重矩阵加权计算总分"""
-    return round(sum(WEIGHTS[dim] * dim_scores.get(dim, 0) for dim in WEIGHTS), 4)
+    w = _get_weights()
+    return round(sum(w[dim] * dim_scores.get(dim, 0) for dim in w), 4)
