@@ -35,6 +35,7 @@ stock_scoring_agent/
 │   └── _run_log.txt       # 运行日志
 ├── scores/backtest/       # 回测输出目录（backtest.py 生成）
 │   ├── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}.csv
+│   ├── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}_veto.csv   # 否决股明细
 │   └── backtest_{score_quarters}_vs_{eval_quarters}_{score_key}_report.txt
 ├── templates/
 │   └── index.html         # 看板前端（Bootstrap + Chart.js，单季度/区间模式，明亮/夜间主题）
@@ -489,11 +490,30 @@ python fetch_data.py --all --mode core
 [五分位组收益]
   Q1~Q5 各组总收益 + 年化收益
 
+[否决机制有效性分析]（始终输出）
+  否决概览: 否决股数量 vs 通过股数量
+  收益对比: 否决股 vs 通过股的平均/中位收益
+  否决有效性: 有效 / 中性 / 过度否决
+  高分否决股: 分数高但被否决的股票明细 + 实际涨幅
+  否决原因效果: 每类否决原因对应的平均涨幅
+
 [个股明细]
   Top 20 高分股 / Bottom 10 低分股
   最大赢家 Top 5 / 最大输家 Bottom 5
   多季度得分趋势（聚合模式时）
 ```
+
+### 否决分析逻辑
+
+回测始终自动执行否决分析（不需要 `--include-veto`），输出三层判断：
+
+| 判断 | 条件 | 含义 |
+|------|------|------|
+| **有效** | 通过股平均收益 > 否决股 + 2% | 否决机制正确过滤了差股 |
+| **中性** | 差值在 ±2% 以内 | 否决影响不大 |
+| **过度否决** | 否决股平均收益 > 通过股 + 2% | 否决可能误杀好股票，需调整阈值 |
+
+**高分否决股**：分数 >= 通过股中位数但被否决的股票。如果这些股票实际涨幅跑赢通过股，说明否决规则可能过严。
 
 ### 命令行参数
 

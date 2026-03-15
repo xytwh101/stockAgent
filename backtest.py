@@ -396,6 +396,113 @@ def hit_rate(scores: list[float], returns: list[float]) -> float:
 # 主回测流程
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _compute_veto_analysis(
+    score_quarters: list[str],
+    score_key: str,
+    agg_mode: str,
+    score_end: date,
+    eval_end: date,
+    fetcher: DataFetcher,
+    non_veto_rows: list[dict],
+    verbose: bool = True,
+) -> dict:
+    """
+    否决机制有效性分析。
+
+    加载所有被否决的股票，计算其实际涨幅，
+    与非否决股对比，判断否决机制是否真的过滤掉了差股票。
+    """
+    # 加载全部股票（含否决），再筛出仅否决股
+    all_scored = aggregate_multi_quarter_scores(
+        score_quarters, score_key, mode=agg_mode, include_veto=True
+    )
+    veto_scored = [s for s in all_scored if s.get("veto_triggered")]
+
+    if not veto_scored:
+        return {"n_veto": 0}
+
+    if verbose:
+        print(f"\n[否决分析] 加载 {len(veto_scored)} 只否决股...")
+
+    # 计算否决股涨幅
+    veto_rows = []
+    for rec in veto_scored:
+        ret = compute_return(rec["ticker"], score_end, eval_end, fetcher)
+        veto_rows.append({
+            **rec,
+            "forward_return": ret,
+        })
+
+    veto_valid = [r for r in veto_rows if r["forward_return"] is not None]
+    non_veto_valid = [r for r in non_veto_rows if r["forward_return"] is not None]
+
+    # 基础统计
+    veto_returns = [r["forward_return"] for r in veto_valid]
+    non_veto_returns = [r["forward_return"] for r in non_veto_valid]
+
+    veto_avg = sum(veto_returns) / len(veto_returns) if veto_returns else None
+    non_veto_avg = sum(non_veto_returns) / len(non_veto_returns) if non_veto_returns else None
+    veto_median = sorted(veto_returns)[len(veto_returns) // 2] if veto_returns else None
+    non_veto_median = sorted(non_veto_returns)[len(non_veto_returns) // 2] if non_veto_returns else None
+
+    # 高分否决股分析（分数高于非否决股中位数，但被否决了）
+    non_veto_scores = [r["score"] for r in non_veto_valid]
+    score_median = sorted(non_veto_scores)[len(non_veto_scores) // 2] if non_veto_scores else 0
+    high_score_vetoed = [r for r in veto_valid if r["score"] >= score_median]
+    high_score_vetoed.sort(key=lambda r: r["score"], reverse=True)
+
+    high_veto_avg = (
+        sum(r["forward_return"] for r in high_score_vetoed) / len(high_score_vetoed)
+        if high_score_vetoed else None
+    )
+
+    # 否决原因统计
+    reason_counts: dict[str, int] = {}
+    reason_returns: dict[str, list[float]] = {}
+    for r in veto_valid:
+        for reason in r.get("veto_reasons", []):
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            reason_returns.setdefault(reason, []).append(r["forward_return"])
+
+    reason_stats = {}
+    for reason, rets in reason_returns.items():
+        reason_stats[reason] = {
+            "count": reason_counts[reason],
+            "avg_return": sum(rets) / len(rets),
+        }
+
+    # 判断否决有效性
+    if veto_avg is not None and non_veto_avg is not None:
+        saved_return = non_veto_avg - veto_avg  # 正值 = 否决帮你避开了差股
+        if saved_return > 0.02:
+            effectiveness = "有效"
+        elif saved_return > -0.02:
+            effectiveness = "中性"
+        else:
+            effectiveness = "过度否决"
+    else:
+        saved_return = None
+        effectiveness = "数据不足"
+
+    return {
+        "n_veto": len(veto_scored),
+        "n_veto_valid": len(veto_valid),
+        "n_non_veto_valid": len(non_veto_valid),
+        "veto_avg_return": veto_avg,
+        "veto_median_return": veto_median,
+        "non_veto_avg_return": non_veto_avg,
+        "non_veto_median_return": non_veto_median,
+        "saved_return": saved_return,
+        "effectiveness": effectiveness,
+        "high_score_vetoed": high_score_vetoed[:10],  # Top 10 高分否决股
+        "high_score_vetoed_count": len(high_score_vetoed),
+        "high_veto_avg_return": high_veto_avg,
+        "score_median_threshold": score_median,
+        "reason_stats": reason_stats,
+        "veto_rows": veto_valid,
+    }
+
+
 def run_backtest(
     score_quarters: list[str],
     eval_quarters: list[str],
@@ -416,7 +523,7 @@ def run_backtest(
       score_key:      排名依据
       agg_mode:       聚合方式 ('quarter_weighted' | 'latest')
       top_n:          只看前 N 只
-      include_veto:   是否包含否决股
+      include_veto:   是否包含否决股（混入主排名分析）
       auto_score:     是否自动打分
       fresh_score:    是否重新打分
 
@@ -425,6 +532,7 @@ def run_backtest(
         'rows': [个股详情],
         'metrics': {整体指标},
         'config': {回测配置},
+        'veto_analysis': {否决机制有效性分析},
       }
     """
     # 计算时间窗口
@@ -470,14 +578,14 @@ def run_backtest(
         ensure_scored(score_quarters, fresh=fresh_score)
         print()
 
-    # 2. 加载并聚合打分
+    # 2. 加载并聚合打分（非否决股用于主排名）
     print("[Step 2] 加载打分数据...")
     scored = aggregate_multi_quarter_scores(
         score_quarters, score_key, mode=agg_mode, include_veto=include_veto
     )
     if not scored:
         print("[错误] 无有效打分数据")
-        return {"rows": [], "metrics": {}, "config": config}
+        return {"rows": [], "metrics": {}, "config": config, "veto_analysis": {}}
 
     if top_n:
         scored = scored[:top_n]
@@ -538,7 +646,15 @@ def run_backtest(
         "eval_end": eval_end.isoformat(),
     }
 
-    return {"rows": valid_rows, "metrics": metrics, "config": config}
+    # 6. 否决机制有效性分析（始终执行）
+    print("\n[Step 4] 否决机制有效性分析...")
+    veto_analysis = _compute_veto_analysis(
+        score_quarters, score_key, agg_mode,
+        score_end, eval_end, fetcher, valid_rows, verbose,
+    )
+
+    return {"rows": valid_rows, "metrics": metrics, "config": config,
+            "veto_analysis": veto_analysis}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -637,6 +753,88 @@ def print_report(result: dict):
         print(f"    Q1-Q5 超额:  {spread * 100:+.1f}%  "
               f"(年化 {ann_spread * 100:+.1f}%/年)")
     print()
+
+    # ── 否决机制有效性分析 ──────────────────────────────────────────────
+    veto_analysis = result.get("veto_analysis", {})
+    n_veto = veto_analysis.get("n_veto", 0)
+    if n_veto > 0:
+        print("─" * 70)
+        print("  否决机制有效性分析")
+        print("─" * 70)
+        print()
+
+        n_vv = veto_analysis.get("n_veto_valid", 0)
+        n_nv = veto_analysis.get("n_non_veto_valid", 0)
+        va_ret = veto_analysis.get("veto_avg_return")
+        nv_ret = veto_analysis.get("non_veto_avg_return")
+        va_med = veto_analysis.get("veto_median_return")
+        nv_med = veto_analysis.get("non_veto_median_return")
+        eff = veto_analysis.get("effectiveness", "数据不足")
+
+        print(f"  [否决概览]")
+        print(f"    被否决股票:   {n_veto} 只 ({n_vv} 只有价格数据)")
+        print(f"    通过股票:     {n_nv} 只")
+        print()
+
+        if va_ret is not None and nv_ret is not None:
+            saved = veto_analysis.get("saved_return", 0)
+            print(f"  [收益对比]     {'否决股':>10} {'通过股':>10} {'差值':>10}")
+            print(f"    平均收益:    {va_ret*100:>+9.1f}% {nv_ret*100:>+9.1f}% {(nv_ret-va_ret)*100:>+9.1f}%")
+            if va_med is not None and nv_med is not None:
+                print(f"    中位收益:    {va_med*100:>+9.1f}% {nv_med*100:>+9.1f}% {(nv_med-va_med)*100:>+9.1f}%")
+            print()
+            print(f"  [否决有效性]   {eff}")
+            if eff == "有效":
+                print(f"    否决机制有效：被否决股平均跑输通过股 {saved*100:.1f}%")
+            elif eff == "过度否决":
+                print(f"    否决可能过严：被否决股平均跑赢通过股 {-saved*100:.1f}%")
+                print(f"    建议检查否决阈值是否过于严格")
+            else:
+                print(f"    否决影响中性：两组收益差异不大 ({saved*100:+.1f}%)")
+            print()
+
+        # 高分否决股明细
+        high_vetoed = veto_analysis.get("high_score_vetoed", [])
+        if high_vetoed:
+            threshold = veto_analysis.get("score_median_threshold", 0)
+            hv_count = veto_analysis.get("high_score_vetoed_count", 0)
+            hv_avg = veto_analysis.get("high_veto_avg_return")
+            print(f"  [高分否决股]  分数 >= {threshold:.2f}（通过股中位数），共 {hv_count} 只")
+            if hv_avg is not None:
+                print(f"    这些股票平均涨幅: {hv_avg*100:+.1f}%")
+                if nv_ret is not None:
+                    diff = hv_avg - nv_ret
+                    if diff > 0.02:
+                        print(f"    --> 高分否决股跑赢通过股 {diff*100:.1f}%，否决可能误杀了好股票！")
+                    elif diff < -0.02:
+                        print(f"    --> 高分否决股跑输通过股 {-diff*100:.1f}%，否决判断正确")
+                    else:
+                        print(f"    --> 与通过股收益接近（差 {diff*100:+.1f}%）")
+            print()
+            print(f"    {'代码':<7} {'名称':<18} {'打分':>6}  {'涨幅':>9}  否决原因")
+            print(f"    {'─'*7} {'─'*18} {'─'*6}  {'─'*9}  {'─'*25}")
+            for r in high_vetoed[:10]:
+                ret = r.get("forward_return")
+                ret_str = format_pct(ret) if ret is not None else "N/A"
+                reasons = "; ".join(r.get("veto_reasons", [])[:2])
+                name = (r.get("name") or "")[:16]
+                print(f"    {r['ticker']:<7} {name:<18} {r['score']:>6.2f}  {ret_str:>9}  {reasons}")
+            print()
+
+        # 否决原因统计
+        reason_stats = veto_analysis.get("reason_stats", {})
+        if reason_stats:
+            print(f"  [否决原因效果]")
+            print(f"    {'原因':<35} {'次数':>4}  {'平均涨幅':>10}")
+            print(f"    {'─'*35} {'─'*4}  {'─'*10}")
+            for reason, stats in sorted(reason_stats.items(),
+                                         key=lambda x: x[1]["avg_return"]):
+                print(f"    {reason[:33]:<35} {stats['count']:>4}  "
+                      f"{stats['avg_return']*100:>+9.1f}%")
+            print()
+    else:
+        print("  [否决分析] 本次回测无否决股票")
+        print()
 
     # ── 第二部分: 个股明细 ──────────────────────────────────────────────
     if not rows:
@@ -755,6 +953,30 @@ def save_report_files(result: dict, output_dir: Path) -> tuple[Path, Path]:
                 qs_included,
                 qs_scores,
             ]) + "\n")
+
+    # ── 否决股 CSV（如果有否决分析数据）──
+    veto_analysis = result.get("veto_analysis", {})
+    veto_rows = veto_analysis.get("veto_rows", [])
+    if veto_rows:
+        veto_csv_path = output_dir / f"backtest_{tag}_veto.csv"
+        veto_header = [
+            "ticker", "name", "sector", "score",
+            "forward_return_pct", "veto_reasons",
+        ]
+        with veto_csv_path.open("w", encoding="utf-8") as f:
+            f.write(",".join(veto_header) + "\n")
+            for r in sorted(veto_rows, key=lambda x: x["score"], reverse=True):
+                ret = r.get("forward_return")
+                ret_pct = f"{ret * 100:.2f}" if ret is not None else ""
+                reasons = "; ".join(r.get("veto_reasons", []))
+                f.write(",".join([
+                    r["ticker"],
+                    f'"{r.get("name", "")}"',
+                    r.get("sector", ""),
+                    f"{r['score']:.4f}",
+                    ret_pct,
+                    f'"{reasons}"',
+                ]) + "\n")
 
     # ── 文本报告（重定向 print_report 到文件）──
     rpt_path = output_dir / f"backtest_{tag}_report.txt"
