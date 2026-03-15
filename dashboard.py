@@ -164,34 +164,31 @@ def _load_quarter_stocks(quarter: str):
     return stocks
 
 
-def _aggregate_year_stocks(year: str):
-    """将一年内所有季度的打分取平均，返回聚合后的股票列表."""
-    year_dir_prefix = f"{year}-Q"
-    quarter_dirs = []
-    if os.path.exists(SCORES_DIR):
-        for d in sorted(os.listdir(SCORES_DIR)):
-            if d.startswith(year_dir_prefix):
-                quarter_dirs.append(d)
+def _aggregate_multi_quarter_stocks(quarter_list: list[str]):
+    """将多个季度的打分取平均，返回聚合后的股票列表.
 
-    if not quarter_dirs:
+    通用聚合函数：支持年度汇总、自定义区间等。
+    """
+    if not quarter_list:
         return []
 
     # 收集所有季度数据，按 ticker 聚合
     ticker_data = {}  # ticker -> list of stock dicts
-    for q in quarter_dirs:
+    for q in sorted(quarter_list):
         for s in _load_quarter_stocks(q):
             t = s.get("ticker")
             if t:
                 ticker_data.setdefault(t, []).append(s)
 
-    # 对每只股票取各季度平均
+    if not ticker_data:
+        return []
+
     DIM_KEYS = ["business_quality", "financial_health", "growth", "management", "valuation"]
     MASTER_KEYS = ["buffett", "munger", "duan", "lynch"]
 
     aggregated = []
     for ticker, entries in ticker_data.items():
-        n = len(entries)
-        latest = entries[-1]  # 取最新季度的 company_info 等元数据
+        latest = entries[-1]
 
         def avg_field(field_path, entries):
             vals = []
@@ -203,9 +200,10 @@ def _aggregate_year_stocks(year: str):
                     vals.append(v)
             return sum(vals) / len(vals) if vals else None
 
+        label = quarter_list[0] if len(quarter_list) == 1 else f"{quarter_list[0]}~{quarter_list[-1]}"
         agg = {
             "ticker": ticker,
-            "quarter": year,
+            "quarter": label,
             "composite_score": avg_field(["composite_score"], entries) or 0,
             "veto_triggered": any(e.get("veto_triggered") for e in entries),
             "veto_reasons": list({r for e in entries for r in (e.get("veto_reasons") or [])}),
@@ -232,18 +230,37 @@ def _aggregate_year_stocks(year: str):
     return aggregated
 
 
+def _aggregate_year_stocks(year: str):
+    """将一年内所有季度的打分取平均（兼容旧调用）."""
+    quarter_dirs = []
+    if os.path.exists(SCORES_DIR):
+        for d in sorted(os.listdir(SCORES_DIR)):
+            if d.startswith(f"{year}-Q"):
+                quarter_dirs.append(d)
+    return _aggregate_multi_quarter_stocks(quarter_dirs)
+
+
 @app.route("/api/stocks")
 def list_stocks():
-    """返回某季度/年度所有股票的摘要（供侧边栏列表使用）.
+    """返回某季度/年度/自定义区间所有股票的摘要.
 
-    参数:
-      quarter=2026-Q1  → 单季度
-      year=2026        → 年度聚合（所有季度平均）
+    参数（优先级从高到低）:
+      quarters=2023-Q1,2023-Q2  → 自定义多季度聚合
+      year=2026                 → 年度聚合
+      quarter=2026-Q1           → 单季度
     """
+    quarters_raw = request.args.get("quarters", "").strip()
     year = request.args.get("year", "").strip()
     quarter = _safe_quarter(request.args.get("quarter", ""))
 
-    if year:
+    if quarters_raw:
+        quarter_list = [_safe_quarter(q) for q in quarters_raw.split(",") if q.strip()]
+        if len(quarter_list) == 1:
+            stocks = _load_quarter_stocks(quarter_list[0])
+            stocks.sort(key=lambda s: (s.get("composite_score") or 0), reverse=True)
+        else:
+            stocks = _aggregate_multi_quarter_stocks(quarter_list)
+    elif year:
         stocks = _aggregate_year_stocks(year)
     else:
         stocks = _load_quarter_stocks(quarter)
@@ -256,13 +273,29 @@ def list_stocks():
 def get_stock(ticker: str):
     """返回单只股票的完整数据，附带历史财务时序.
 
-    支持 ?quarter=2026-Q1（单季度）或 ?year=2026（年度聚合）。
+    支持:
+      ?quarters=2023-Q1,2023-Q2  自定义多季度聚合
+      ?year=2026                 年度聚合
+      ?quarter=2026-Q1           单季度
     """
+    quarters_raw = request.args.get("quarters", "").strip()
     year = request.args.get("year", "").strip()
     quarter = _safe_quarter(request.args.get("quarter", ""))
 
-    if year:
-        # 年度模式：聚合该年所有季度的数据
+    if quarters_raw:
+        quarter_list = [_safe_quarter(q) for q in quarters_raw.split(",") if q.strip()]
+        if len(quarter_list) == 1:
+            json_path = os.path.join(SCORES_DIR, quarter_list[0], f"{ticker}.json")
+            if not os.path.exists(json_path):
+                return jsonify({"error": "Not found"}), 404
+            with open(json_path, encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            stocks = _aggregate_multi_quarter_stocks(quarter_list)
+            data = next((s for s in stocks if s["ticker"] == ticker), None)
+            if not data:
+                return jsonify({"error": "Not found"}), 404
+    elif year:
         stocks = _aggregate_year_stocks(year)
         data = next((s for s in stocks if s["ticker"] == ticker), None)
         if not data:
