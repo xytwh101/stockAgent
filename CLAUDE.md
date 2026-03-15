@@ -14,8 +14,10 @@ stock_scoring_agent/
 ├── config.py              # 所有常量/权重/阈值的唯一来源，改参数只动这里
 ├── run_scoring.py         # 主入口：全量打分流水线（支持断点续跑）
 ├── fetch_data.py          # 独立数据拉取脚本（纯拉取，不打分）
+├── backtest.py            # 打分回测验证：预测排名 vs 实际涨幅排名
 ├── inspect_cache.py       # 数据库查询工具（查缓存/展示财报）
 ├── run_a_stocks.py        # 专项脚本：对 A 开头的美股打分，输出 Top10
+├── dashboard.py           # 可视化看板 Flask 服务（→ http://localhost:5001）
 ├── src/
 │   ├── fetcher.py         # 数据获取 + SQLite 缓存（唯一网络边界）
 │   ├── normalizer.py      # 原始数据 → NormalizedFinancials dataclass
@@ -30,18 +32,12 @@ stock_scoring_agent/
 ├── scores/{quarter}/      # 输出目录，按季度归档
 │   ├── {TICKER}.json      # 单股详细打分
 │   ├── _summary.csv       # 全量汇总表
-│   └── _run_log.txt       # 运行日志
-├── dashboard.py           # 可视化看板 Flask 服务（python dashboard.py → http://localhost:5001）
-├── backtest.py            # 打分回测验证：比较历史打分排名与未来实际涨幅排名
+│   ├── _run_log.txt       # 运行日志
+│   └── backtest/          # 回测输出（backtest.py 生成）
+│       ├── backtest_{quarter}_{score_key}_{N}y.csv
+│       └── backtest_{quarter}_{score_key}_{N}y_report.txt
 ├── templates/
 │   └── index.html         # 看板前端（Bootstrap + Chart.js，支持明亮/夜间模式）
-├── scores/{quarter}/
-│   ├── {TICKER}.json      # 单股详细打分
-│   ├── _summary.csv       # 全量汇总表
-│   ├── _run_log.txt       # 运行日志
-│   └── backtest/          # 回测输出目录
-│       ├── backtest_{quarter}_{score_key}_{N}y.csv      # 逐股明细
-│       └── backtest_{quarter}_{score_key}_{N}y_report.txt  # 文本报告
 ├── tests/
 │   └── test_fetch.py      # 数据拉取测试（python tests/test_fetch.py AAPL MSFT）
 └── .env                   # FMP_API_KEY（不提交到 git）
@@ -165,12 +161,29 @@ python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 
 ```
 全量股票（~6000）
-  ↓ Stage1: 退市过滤(isActivelyTrading) + 市值>$3亿 + 日均成交>$50万 + 上市>3年 + 交易所[NYSE/NASDAQ/AMEX]
+  ↓ Stage1: 退市过滤（三重判断）+ 市值>$3亿 + 日均成交>$50万 + 上市>3年 + 交易所[NYSE/NASDAQ/AMEX]
 ~2500只
   ↓ Stage2: 过去3年至少2年盈利 + 总负债/总资产<85%
 ~1500只
   ↓ Stage3: 五维打分 + 一票否决
 最终排名
+```
+
+### 退市 / 实质停止交易过滤（三重判断）
+
+三项检查在打分和拉取流程中同时生效，profile 已缓存时零额外 API 调用：
+
+| 检查项 | 判断条件 | 生效位置 |
+|--------|---------|---------|
+| FMP 官方标记 | `isActivelyTrading = False` | Stage1、score_ticker、fetch_ticker |
+| 无报价 | `profile.price = 0` | Stage1、score_ticker、fetch_ticker |
+| 年报过期 | 最新年报距今 > 18 个月 | score_ticker（拿到完整 raw 后检查） |
+
+**注意**：不能用 `not profile.get("isActivelyTrading", True)` 判断——当 FMP 返回 `null` 时，Python 得到 `None`，`not None = True` 会误杀正常股票。须显式判断：
+```python
+is_active = profile.get("isActivelyTrading")
+if is_active is not None and not bool(is_active):
+    ...  # 确认退市
 ```
 
 ### 五大评分维度
@@ -210,9 +223,24 @@ python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 | 财务报表（损益/资产/现金流） | 90天 | 季报才更新 |
 | 估值数据（TTM PE/PB等） | 7天 | 价格每天变 |
 | 股票列表 | 30天 | 月度刷新 |
-| 公司 profile | 30天 | 含市值/上市日期 |
+| 公司 profile | 30天 | 含市值/上市日期/退市标记 |
+| 日线价格 | 7天 | 回测用 |
 
-缓存存储在 `data/stock_cache.db`（SQLite），key 格式为 `{endpoint}:{ticker}:{period}`。
+缓存存储在 `data/stock_cache.db`（SQLite），key 格式为 `{endpoint}:{ticker}`。
+
+### fetch_data.py 增量续跑机制
+
+`fetch_data.py` 天然支持断点续跑，**无需任何额外参数**：
+- 每只股票拉取前调用 `missing_endpoints()` 检查缓存状态
+- 已缓存且未过期的端点直接跳过，不发网络请求
+- 中途中断后重新运行 `--all`，已拉到的股票全部自动跳过
+
+```bash
+# 昨天拉到 KSEA 中断了，今天直接重跑即可，已有数据自动跳过
+python fetch_data.py --all --mode core
+```
+
+唯一额外开销：启动时需过一遍全量列表做缓存检查（几秒钟）。
 
 ---
 
@@ -308,16 +336,10 @@ python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 | `--end-date` | — | 手动指定终止日期（YYYY-MM-DD） |
 | `--no-save` | — | 不保存报告文件 |
 
-### 输出文件
-
-结果保存在 `scores/{quarter}/backtest/`：
-- `backtest_{tag}.csv` — 逐股明细（predicted_rank / actual_rank / forward_return_pct 等）
-- `backtest_{tag}_report.txt` — 文字报告（IC / 命中率 / 五分位表 / Top20 列表）
-
 ### 前提条件
 
 需要历史价格数据（`price_daily:{ticker}` 缓存 TTL 7 天）。
-建议先运行 `fetch_data.py` 将价格写入缓存，回测时不发出额外网络请求。
+建议先运行 `fetch_data.py --all --mode full` 将价格写入缓存，回测时不发出额外网络请求。
 
 ---
 
@@ -333,13 +355,13 @@ python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 
 ## 注意事项
 
-1. **退市过滤**：依据 FMP profile 中的 `isActivelyTrading` 字段（`False` = 已退市）。在三处生效：Stage1 漏斗（全量模式）、`score_ticker()`（指定 ticker 模式）、`fetch_ticker()`（数据拉取）。Profile 已缓存时零额外 API 调用；字段缺失时保守处理（不过滤）。
-2. **API Key** 在 `.env` 中，不提交 git。`.env.example` 中有示例。
-2. **断点续跑**：`run_checkpoints` 表记录已打分的 `(quarter, ticker)`，重启不会重复打分。用 `--fresh` 参数强制重跑。
-3. **ETF/基金过滤**：通过 Stage1 市值+流动性过滤，大多数 ETF 会被筛掉。
-4. **missing_valuation_ttm**：TTM 估值数据缺失时打分时估值维度得 0 分，JSON 中标记 `data_quality_flags`。
-5. **`stable/search-symbol`** 是当前唯一可用的股票搜索端点，已缓存 A 股列表（key: `a_stocks:list`）。
-6. **拉取与打分分离**：推荐先用 `fetch_data.py` 把数据拉进缓存，再跑 `run_scoring.py`。打分时若数据已在缓存则不会发出任何网络请求。
-7. **cache_key 格式**：`{type}:{TICKER}`，如 `income_annual:AAPL`、`ratios_ttm:AAPL`。每个端点对应固定 key，见 `fetch_data.py` 中的 `_CACHE_KEY_PREFIX`。
-8. **回测的 Point-in-Time 问题**：`backtest.py` 直接用打分 JSON 中的分数，不重新计算，天然避免未来数据泄漏。但股价涨幅以季度末收盘价为起点，需确保 `price_daily` 缓存覆盖该日期。
-9. **回测有效性条件**：至少需要 5 只股票有完整价格数据才计算 IC；五分位分析至少需要 5 只（每组 1 只）。样本太少时指标不具统计意义。
+1. **API Key** 在 `.env` 中，不提交 git。`.env.example` 中有示例。
+2. **断点续跑（打分）**：`run_checkpoints` 表记录已打分的 `(quarter, ticker)`，重启不会重复打分。用 `--fresh` 参数强制重跑。
+3. **断点续跑（拉取）**：`fetch_data.py` 通过缓存有效期判断自动跳过已拉取数据，重跑 `--all` 即可续跑，无需额外参数。
+4. **ETF/基金过滤**：通过 Stage1 市值+流动性过滤，大多数 ETF 会被筛掉。
+5. **missing_valuation_ttm**：TTM 估值数据缺失时估值维度得 0 分，JSON 中标记 `data_quality_flags`。
+6. **`stable/search-symbol`** 是当前唯一可用的股票搜索端点，已缓存 A 股列表（key: `a_stocks:list`）。
+7. **拉取与打分分离**：推荐先用 `fetch_data.py` 把数据拉进缓存，再跑 `run_scoring.py`。打分时若数据已在缓存则不会发出任何网络请求。
+8. **cache_key 格式**：`{type}:{TICKER}`，如 `income_annual:AAPL`、`ratios_ttm:AAPL`。每个端点对应固定 key，见 `fetch_data.py` 中的 `_CACHE_KEY_PREFIX`。
+9. **回测的 Point-in-Time 问题**：`backtest.py` 直接用打分 JSON 中的分数，不重新计算，天然避免未来数据泄漏。股价涨幅以季度末收盘价为起点，需确保 `price_daily` 缓存覆盖该日期。
+10. **回测有效性条件**：至少需要 5 只股票有完整价格数据才计算 IC；五分位分析至少需要 5 只（每组 1 只）。样本太少时指标不具统计意义。
