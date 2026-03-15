@@ -58,10 +58,15 @@ from typing import Optional
 # 确保项目根目录在 sys.path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import OUTPUT_CONFIG
+from config import OUTPUT_CONFIG, SCORING_VERSION
 from src.fetcher import DataFetcher
 from src.normalizer import Normalizer
-from src.scorer import DimensionScorer, FilterFunnel, MasterScorer, VetoEngine
+from src.scorer import (
+    DimensionScorer, DimensionScorerV2,
+    FilterFunnel,
+    MasterScorer,
+    VetoEngine, VetoEngineV2,
+)
 from src.masters import buffett, munger, duan, lynch
 
 
@@ -175,11 +180,12 @@ def score_ticker(
     ticker: str,
     fetcher: DataFetcher,
     normalizer: Normalizer,
-    dim_scorer: DimensionScorer,
+    dim_scorer,
     master_scorer: MasterScorer,
-    veto_engine: VetoEngine,
+    veto_engine,
     quarter: str,
     as_of_date: Optional[_date] = None,
+    scoring_version: str = "v2",
 ) -> dict | None:
     """
     对单只股票完整打分，返回结果 dict。
@@ -248,15 +254,21 @@ def score_ticker(
 
         # 8. 综合得分（默认权重加权）
         from config import DIMENSION_WEIGHTS
+        if scoring_version == "v2":
+            from config import V2_DIMENSION_WEIGHTS
+            dim_weights = V2_DIMENSION_WEIGHTS
+        else:
+            dim_weights = DIMENSION_WEIGHTS
         composite = sum(
-            DIMENSION_WEIGHTS[dim] * dim_scores.get(dim, 0)
-            for dim in DIMENSION_WEIGHTS
+            dim_weights[dim] * dim_scores.get(dim, 0)
+            for dim in dim_weights
         )
 
         return {
             "ticker": ticker,
             "scored_at": datetime.now().isoformat(),
             "quarter": quarter,
+            "scoring_version": scoring_version,
             "pit_mode": as_of_date is not None,
             "as_of_date": as_of_date.isoformat() if as_of_date else None,
             "composite_score": round(composite, 4),
@@ -384,11 +396,19 @@ def apply_offline_mode(fetcher: DataFetcher):
     fetcher._offline = True
 
 
+def _make_scorer_components(version: str):
+    """根据版本创建打分组件三件套"""
+    if version == "v2":
+        return DimensionScorerV2(), MasterScorer(version="v2"), VetoEngineV2()
+    return DimensionScorer(), MasterScorer(version="v1"), VetoEngine()
+
+
 def run_offline_cached(
     quarter: str | None = None,
     fresh: bool = False,
     limit: int | None = None,
     workers: int = 16,
+    scoring_version: str | None = None,
 ) -> list[dict]:
     """
     只对数据库中已缓存的股票离线打分，不发任何 API 请求。
@@ -403,6 +423,7 @@ def run_offline_cached(
     返回:
         所有打分成功的结果列表（同时写入 JSON 和汇总 CSV）
     """
+    scoring_version = scoring_version or SCORING_VERSION
     quarter = quarter or current_quarter()
 
     # 自动检测历史季度，启用 PIT 过滤
@@ -414,7 +435,7 @@ def run_offline_cached(
     out_dir = ensure_output_dir(quarter)
 
     print(f"\n{'='*60}")
-    print(f"  离线打分（仅缓存数据）— {quarter}  [workers={workers}]{pit_tag}")
+    print(f"  离线打分（仅缓存数据）— {quarter}  [{scoring_version}] [workers={workers}]{pit_tag}")
     print(f"  输出目录: {out_dir}")
     print(f"{'='*60}\n")
 
@@ -460,9 +481,10 @@ def run_offline_cached(
                 apply_offline_mode(f)
                 _thread_local.fetcher = f
                 _thread_local.normalizer = Normalizer()
-                _thread_local.dim_scorer = DimensionScorer()
-                _thread_local.master_scorer = MasterScorer()
-                _thread_local.veto_engine = VetoEngine()
+                ds, ms, ve = _make_scorer_components(scoring_version)
+                _thread_local.dim_scorer = ds
+                _thread_local.master_scorer = ms
+                _thread_local.veto_engine = ve
             return (
                 _thread_local.fetcher,
                 _thread_local.normalizer,
@@ -473,7 +495,7 @@ def run_offline_cached(
 
         def score_one(ticker: str) -> tuple[str, dict | None]:
             f, norm, dim_s, mstr_s, veto = get_thread_components()
-            result = score_ticker(ticker, f, norm, dim_s, mstr_s, veto, quarter, as_of_date)
+            result = score_ticker(ticker, f, norm, dim_s, mstr_s, veto, quarter, as_of_date, scoring_version)
             # 文件写入在线程内完成，避免占用 print_lock
             if result:
                 save_ticker_result(result, out_dir)
@@ -551,7 +573,11 @@ def main():
     parser.add_argument("--no-sleep", action="store_true", help="去掉每只之间的等待（离线模式推荐）")
     parser.add_argument("--workers",  type=int, default=16,
                         help="离线并行线程数（仅 --offline-db 生效，默认 16，纯离线可调到 32-64）")
+    parser.add_argument("--scoring-version", default=None, choices=["v1", "v2"],
+                        help="打分版本：v1=旧版, v2=新版（默认读 config.SCORING_VERSION）")
     args = parser.parse_args()
+
+    sv = args.scoring_version or SCORING_VERSION
 
     # --offline-db 是 --offline --all-cached 的快捷方式
     if args.offline_db:
@@ -560,6 +586,7 @@ def main():
             fresh=args.fresh,
             limit=args.limit,
             workers=args.workers,
+            scoring_version=sv,
         )
         return
 
@@ -576,7 +603,7 @@ def main():
 
     net_tag = "离线(缓存)" if args.offline else "在线"
     print(f"\n{'='*60}")
-    print(f"  投资大师选股系统 — {quarter}  [{net_tag}]{pit_tag}")
+    print(f"  投资大师选股系统 — {quarter}  [{sv}] [{net_tag}]{pit_tag}")
     print(f"  输出目录: {out_dir}")
     print(f"{'='*60}\n")
 
@@ -586,9 +613,7 @@ def main():
         apply_offline_mode(fetcher)
 
     normalizer = Normalizer()
-    dim_scorer = DimensionScorer()
-    master_scorer = MasterScorer()
-    veto_engine = VetoEngine()
+    dim_scorer, master_scorer, veto_engine = _make_scorer_components(sv)
     funnel = FilterFunnel(fetcher)
 
     run_start = time.time()
@@ -650,7 +675,7 @@ def main():
 
             result = score_ticker(
                 ticker, fetcher, normalizer, dim_scorer,
-                master_scorer, veto_engine, quarter, as_of_date
+                master_scorer, veto_engine, quarter, as_of_date, sv
             )
 
             if result:
