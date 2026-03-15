@@ -13,6 +13,7 @@ fetch_data.py — 专项数据拉取脚本（纯拉取，不打分）
           full       拉全量数据（19 个端点）
   --dry-run          预估调用量，不实际拉取
   --sleep  N         每只股票之间间隔 N 秒（默认 0.3，限速保护）
+  --resume-from SYM  从指定 ticker 开始，跳过之前的所有股票
 
 示例：
   python fetch_data.py --ticker AAPL
@@ -320,6 +321,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="只估算调用量，不实际拉取")
     parser.add_argument("--sleep",   type=float, default=0.1, help="每只股票间隔秒数（默认0.1）")
     parser.add_argument("--workers", type=int, default=8, help="并发拉取股票数（默认8）")
+    parser.add_argument("--resume-from", metavar="SYM",
+                        help="从指定 ticker 开始拉取，跳过排序在它之前的所有股票（含该 ticker）")
     args = parser.parse_args()
 
     endpoints = CORE_ENDPOINTS if args.mode == "core" else FULL_ENDPOINTS
@@ -335,6 +338,28 @@ def main():
 
     try:
         tickers = resolve_tickers(args, fetcher)
+
+        # --resume-from: 跳过指定 ticker 之前的所有股票
+        if args.resume_from:
+            resume_sym = args.resume_from.upper()
+            tickers_sorted = sorted(tickers)
+            try:
+                idx = tickers_sorted.index(resume_sym)
+            except ValueError:
+                # ticker 不在列表中，按字母序找到第一个 >= resume_sym 的位置
+                idx = next(
+                    (i for i, t in enumerate(tickers_sorted) if t >= resume_sym),
+                    len(tickers_sorted),
+                )
+                if idx < len(tickers_sorted):
+                    print(f"  [resume] {resume_sym} 不在列表中，从 {tickers_sorted[idx]} 开始")
+                else:
+                    print(f"  [resume] 没有排在 {resume_sym} 之后的股票，退出")
+                    return
+            skipped_count = idx
+            tickers = tickers_sorted[idx:]
+            print(f"  [resume] 从 {tickers[0]} 开始，跳过前 {skipped_count} 只\n")
+
         total = len(tickers)
 
         if not tickers:

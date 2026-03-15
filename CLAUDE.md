@@ -66,6 +66,9 @@ python fetch_data.py --all --mode full
 # 预估调用量，不实际拉取
 python fetch_data.py --cached --dry-run
 
+# 从指定 ticker 开始拉取，跳过之前的所有股票（按字母序）
+python fetch_data.py --all --resume-from KSEA
+
 # --mode core  = 打分必需 8 端点（默认）
 # --mode full  = 全量 19 端点
 
@@ -326,17 +329,29 @@ V2 核心改进：
 
 ### fetch_data.py 增量续跑机制
 
-`fetch_data.py` 天然支持断点续跑，**无需任何额外参数**：
+`fetch_data.py` 天然支持断点续跑，有两种方式：
+
+**方式一：自动跳过（默认行为）**
 - 每只股票拉取前调用 `missing_endpoints()` 检查缓存状态
 - 已缓存且未过期的端点直接跳过，不发网络请求
 - 中途中断后重新运行 `--all`，已拉到的股票全部自动跳过
+- 唯一额外开销：启动时需过一遍全量列表做缓存检查（几秒钟）
 
 ```bash
-# 昨天拉到 KSEA 中断了，今天直接重跑即可，已有数据自动跳过
+# 重跑即可，已有数据自动跳过
 python fetch_data.py --all --mode core
 ```
 
-唯一额外开销：启动时需过一遍全量列表做缓存检查（几秒钟）。
+**方式二：`--resume-from` 指定起点（跳过缓存检查，更快启动）**
+- 按字母序跳过指定 ticker 之前的所有股票，从该 ticker 开始拉取
+- 若指定 ticker 不在列表中，自动从第一个字母序 >= 它的 ticker 开始
+- 适合已知上次中断位置时使用，省去全量缓存检查时间
+
+```bash
+# 从 KSEA 开始拉取，跳过之前所有股票
+python fetch_data.py --all --resume-from KSEA
+python fetch_data.py --all --mode full --resume-from KSEA
+```
 
 ---
 
