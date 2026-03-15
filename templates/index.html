@@ -179,8 +179,14 @@ body { background: var(--bg); color: var(--txt); font-family: -apple-system, Bli
     <div class="sidebar-top">
       <input class="search" id="searchInput" placeholder="🔍  搜索股票代码或公司名称…" oninput="onSearch(this.value)">
       <div class="sort-bar">
-        <button class="sort-btn active" id="btnScore" onclick="setSort('score')">得分 ↓</button>
-        <button class="sort-btn" id="btnMktcap" onclick="setSort('mktcap')">市值 ↓</button>
+        <select class="quarter-sel" id="sortSel" onchange="setSort(this.value)" style="font-size:0.74rem;padding:3px 6px;">
+          <option value="score">综合得分 ↓</option>
+          <option value="buffett">巴菲特 ↓</option>
+          <option value="munger">芒格 ↓</option>
+          <option value="duan">段永平 ↓</option>
+          <option value="lynch">彼得林奇 ↓</option>
+          <option value="mktcap">市值 ↓</option>
+        </select>
         <button class="sort-btn active" id="btnHideVeto" onclick="toggleHideVeto()" title="隐藏被否决的股票">隐藏否决</button>
         <span class="stock-count" id="stockCount">-</span>
       </div>
@@ -368,13 +374,25 @@ function applyFilter() {
 
 function setSort(by) {
   S.sort = by;
-  ['Score','Mktcap'].forEach(k => $('btn'+k).classList.toggle('active', k.toLowerCase() === by));
   applySort(true);
 }
 
+const MASTER_SORT_KEYS = ['buffett','munger','duan','lynch'];
+
+function getSortScore(s) {
+  if (S.sort === 'score') return s.composite_score || 0;
+  if (S.sort === 'mktcap') return s.company_info?.market_cap || 0;
+  if (MASTER_SORT_KEYS.includes(S.sort)) return s.master_scores?.[S.sort] || 0;
+  return s.composite_score || 0;
+}
+
+function getSortLabel() {
+  const labels = { score:'综合', buffett:'巴菲特', munger:'芒格', duan:'段永平', lynch:'林奇', mktcap:'市值' };
+  return labels[S.sort] || '综合';
+}
+
 function applySort(render = true) {
-  if (S.sort === 'score')  S.filtered.sort((a,b) => b.composite_score - a.composite_score);
-  if (S.sort === 'mktcap') S.filtered.sort((a,b) => (b.company_info?.market_cap||0) - (a.company_info?.market_cap||0));
+  S.filtered.sort((a,b) => getSortScore(b) - getSortScore(a));
   if (render) renderList();
   else renderList();
 }
@@ -385,11 +403,17 @@ function renderList() {
     $('stockList').innerHTML = '<div class="c-muted" style="text-align:center;padding:30px;font-size:.82rem">无匹配结果</div>';
     return;
   }
+  const sortLabel = getSortLabel();
   $('stockList').innerHTML = S.filtered.map(s => {
-    const sc = s.composite_score || 0;
+    const sc = getSortScore(s);
+    const isMktcap = S.sort === 'mktcap';
+    const displayVal = isMktcap ? (sc ? '$'+(sc/1e9).toFixed(0)+'B' : 'N/A') : sc.toFixed(2);
+    const barW = isMktcap ? 0 : sc * 10;
     const active = s.ticker === S.ticker ? ' active' : '';
     const veto = s.veto_triggered ? '<span class="veto-dot" title="触发否决"></span>' : '';
-    const mc = s.company_info?.market_cap ? '$' + (s.company_info.market_cap/1e9).toFixed(0)+'B' : '';
+    const sub = S.sort !== 'score' && S.sort !== 'mktcap'
+      ? `<span style="font-size:.68rem;color:var(--txt2)">综合 ${(s.composite_score||0).toFixed(2)}</span>`
+      : `<span style="font-size:.68rem;color:var(--txt2)">${s.company_info?.market_cap ? '$'+(s.company_info.market_cap/1e9).toFixed(0)+'B' : ''}</span>`;
     return `<div class="stock-item${active}" onclick="loadDetail('${s.ticker}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div style="overflow:hidden">
@@ -397,11 +421,11 @@ function renderList() {
           <div class="stock-name-sm">${(s.company_info?.name||'').slice(0,30)}</div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:8px">
-          <div class="score-mini" style="color:${scoreColor(sc)}">${sc.toFixed(2)}</div>
-          <div style="font-size:.68rem;color:var(--txt2)">${mc}</div>
+          <div class="score-mini" style="color:${isMktcap ? 'var(--txt)' : scoreColor(sc)}">${displayVal}</div>
+          ${sub}
         </div>
       </div>
-      <div class="mini-bar"><div class="mini-bar-fill" style="width:${sc*10}%;background:${scoreColor(sc)}"></div></div>
+      ${!isMktcap ? `<div class="mini-bar"><div class="mini-bar-fill" style="width:${barW}%;background:${scoreColor(sc)}"></div></div>` : ''}
     </div>`;
   }).join('');
 }
