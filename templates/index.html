@@ -173,7 +173,7 @@ body { background: var(--bg); color: var(--txt); font-family: -apple-system, Bli
     <div class="welcome" id="welcome">
       <i class="bi bi-graph-up-arrow"></i>
       <div style="font-size:1.3rem;font-weight:600">投资大师选股系统</div>
-      <div class="c-muted" style="font-size:.88rem">从左侧点击一只股票，查看详细分析</div>
+      <div class="c-muted" style="font-size:.88rem">选择季度或年度，从左侧点击股票查看详细分析</div>
     </div>
     <div id="detail" style="display:none"></div>
   </div>
@@ -204,7 +204,7 @@ function toggleTheme() {
 }
 
 // ── State ─────────────────────────────────────────────────────
-const S = { stocks: [], filtered: [], ticker: null, quarter: '', sort: 'score', query: '', charts: {} };
+const S = { stocks: [], filtered: [], ticker: null, quarter: '', year: '', viewMode: 'quarter', sort: 'score', query: '', charts: {} };
 
 // ── Helpers ───────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -232,25 +232,69 @@ const DIMS = [
 
 // ── Init ──────────────────────────────────────────────────────
 async function init() {
-  const quarters = await fetch('/api/quarters').then(r => r.json());
+  const resp = await fetch('/api/quarters').then(r => r.json());
+  // 兼容旧格式（纯数组）和新格式（{quarters, years}）
+  const quarters = Array.isArray(resp) ? resp : (resp.quarters || []);
+  const years = Array.isArray(resp) ? {} : (resp.years || {});
   const sel = $('quarterSel');
-  sel.innerHTML = quarters.map(q => `<option value="${q}">${q}</option>`).join('') || '<option>暂无数据</option>';
-  S.quarter = quarters[0] || '';
-  if (S.quarter) loadStocks();
+
+  if (!quarters.length) {
+    sel.innerHTML = '<option>暂无数据</option>';
+    return;
+  }
+
+  // 构建分组选择器：年度汇总 + 各季度
+  let html = '';
+  const sortedYears = Object.keys(years).sort().reverse();
+  for (const yr of sortedYears) {
+    const qs = years[yr];
+    // 年度汇总选项（仅当该年有 ≥1 个季度时显示）
+    html += `<optgroup label="${yr} 年">`;
+    if (qs.length > 1) {
+      html += `<option value="year:${yr}">📊 ${yr} 年度汇总（${qs.length}季）</option>`;
+    }
+    for (const q of qs) {
+      html += `<option value="quarter:${q}">${q}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  sel.innerHTML = html;
+
+  // 默认选第一个季度
+  sel.value = `quarter:${quarters[0]}`;
+  parseSelection(sel.value);
+  loadStocks();
+}
+
+function parseSelection(val) {
+  if (val.startsWith('year:')) {
+    S.viewMode = 'year';
+    S.year = val.slice(5);
+    S.quarter = '';
+  } else {
+    S.viewMode = 'quarter';
+    S.quarter = val.replace('quarter:', '');
+    S.year = '';
+  }
 }
 
 function onQuarterChange() {
-  S.quarter = $('quarterSel').value;
+  parseSelection($('quarterSel').value);
   S.ticker = null;
   $('welcome').style.display = '';
   $('detail').style.display = 'none';
   loadStocks();
 }
 
+// ── API query string helper ───────────────────────────────────
+function apiParam() {
+  return S.viewMode === 'year' ? `year=${S.year}` : `quarter=${S.quarter}`;
+}
+
 // ── Stock list ─────────────────────────────────────────────────
 async function loadStocks() {
   $('stockList').innerHTML = '<div class="spinner"><div class="spinner-border spinner-border-sm"></div> 加载中…</div>';
-  S.stocks = await fetch(`/api/stocks?quarter=${S.quarter}`).then(r => r.json());
+  S.stocks = await fetch(`/api/stocks?${apiParam()}`).then(r => r.json());
   applyFilter();
 }
 
@@ -312,7 +356,7 @@ async function loadDetail(ticker) {
   $('welcome').style.display = 'none';
   $('detail').style.display = '';
   $('detail').innerHTML = '<div class="spinner"><div class="spinner-border spinner-border-sm"></div> 加载详情…</div>';
-  const data = await fetch(`/api/stock/${ticker}?quarter=${S.quarter}`).then(r => r.json());
+  const data = await fetch(`/api/stock/${ticker}?${apiParam()}`).then(r => r.json());
   renderDetail(data);
 }
 
@@ -347,6 +391,18 @@ function renderDetail(d) {
       <div style="font-size:.7rem;color:var(--txt2);margin-top:4px">综合得分</div>
     </div>
   </div>`;
+
+  // ── Year mode badge ──
+  const yearBadge = d._quarters_included
+    ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <span style="background:var(--blue);color:#fff;border-radius:4px;padding:2px 10px;font-size:.78rem;font-weight:600">年度汇总</span>
+        <span style="font-size:.78rem;color:var(--txt2)">包含季度：</span>
+        ${d._quarters_included.map(q => {
+          const qs = d._quarter_scores?.[q];
+          return `<span class="pill" style="font-size:.75rem">${q} <span style="color:${scoreColor(qs||0)};font-weight:700">${qs!=null?qs.toFixed(2):'N/A'}</span></span>`;
+        }).join('')}
+      </div>`
+    : '';
 
   // ── Veto ──
   const vetoHtml = d.veto_triggered
@@ -441,6 +497,7 @@ function renderDetail(d) {
   // ── Assemble ──
   $('detail').innerHTML = `
   ${hdr}
+  ${yearBadge}
   ${vetoHtml}
 
   <!-- Master scores -->
@@ -457,6 +514,15 @@ function renderDetail(d) {
       <div class="card-bd"><div class="chart-wrap"><canvas id="chartMaster"></canvas></div></div>
     </div>
   </div>
+
+  ${d._quarters_included && d._quarters_included.length > 1 ? `
+  <!-- Quarter trend chart (year mode only) -->
+  <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:12px">
+    <div class="card">
+      <div class="card-hd"><i class="bi bi-graph-up"></i>季度得分趋势</div>
+      <div class="card-bd"><div class="chart-wrap"><canvas id="chartQtrTrend"></canvas></div></div>
+    </div>
+  </div>` : ''}
 
   ${fin ? `
   <!-- Charts row 2: revenue + margin -->
@@ -571,6 +637,43 @@ function renderDetail(d) {
       }
     }
   });
+
+  // Quarter trend chart (year mode)
+  const qtrCtx = $('chartQtrTrend');
+  if (qtrCtx && d._quarters_included) {
+    const qLabels = d._quarters_included;
+    const qScores = qLabels.map(q => d._quarter_scores?.[q] ?? null);
+    const dimColors = {
+      business_quality: 'rgba(88,166,255,.7)',
+      financial_health: 'rgba(63,185,80,.7)',
+      growth: 'rgba(248,81,73,.7)',
+      management: 'rgba(188,140,255,.7)',
+      valuation: 'rgba(210,153,34,.7)',
+    };
+    const datasets = [
+      { label: '综合得分', data: qScores, borderColor: '#fff', backgroundColor: 'rgba(255,255,255,.1)', borderWidth: 2.5, tension: .3, pointRadius: 4, yAxisID: 'y' },
+    ];
+    DIMS.forEach(dim => {
+      datasets.push({
+        label: dim.name,
+        data: qLabels.map(q => d._quarter_dimensions?.[q]?.[dim.key] ?? null),
+        borderColor: dimColors[dim.key],
+        borderWidth: 1.5, tension: .3, pointRadius: 3, borderDash: [4,2], yAxisID: 'y',
+      });
+    });
+    S.charts.qtrTrend = new Chart(qtrCtx, {
+      type: 'line',
+      data: { labels: qLabels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { font: { size: 10 } } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+          y: { min: 0, max: 10, grid: { color: gridColor() }, ticks: { font: { size: 9 } } },
+        }
+      }
+    });
+  }
 
   if (!fin) return;
   const years = [...(fin.years || [])].reverse();

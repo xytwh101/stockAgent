@@ -118,22 +118,33 @@ def index():
 
 @app.route("/api/quarters")
 def list_quarters():
+    """返回季度列表 + 按年分组结构.
+
+    返回格式:
+    {
+      "quarters": ["2026-Q1", "2025-Q4", ...],
+      "years": {"2026": ["2026-Q1"], "2025": ["2025-Q4", ...]}
+    }
+    """
     quarters = []
     if os.path.exists(SCORES_DIR):
         for d in sorted(os.listdir(SCORES_DIR), reverse=True):
             csv_path = os.path.join(SCORES_DIR, d, "_summary.csv")
             if os.path.exists(csv_path):
                 quarters.append(d)
-    return jsonify(quarters)
+
+    # 按年分组
+    years = {}
+    for q in quarters:
+        year = q.split("-")[0]
+        years.setdefault(year, []).append(q)
+
+    return jsonify({"quarters": quarters, "years": years})
 
 
-@app.route("/api/stocks")
-def list_stocks():
-    """返回某季度所有股票的摘要（供侧边栏列表使用）."""
-    quarter = _safe_quarter(request.args.get("quarter", ""))
-    quarter_dir = os.path.join(SCORES_DIR, quarter)
-
-    # 优先从 JSON 文件读（包含 company_info / master_scores 等嵌套结构）
+def _load_quarter_stocks(quarter: str):
+    """加载单个季度的所有股票数据."""
+    quarter_dir = os.path.join(SCORES_DIR, _safe_quarter(quarter))
     stocks = []
     if os.path.isdir(quarter_dir):
         for fname in os.listdir(quarter_dir):
@@ -144,29 +155,124 @@ def list_stocks():
                     stocks.append(json.load(f))
             except Exception:
                 continue
-
-    # fallback: CSV
     if not stocks:
         csv_path = os.path.join(quarter_dir, "_summary.csv")
         if os.path.exists(csv_path):
             df = pd.read_csv(csv_path)
             df = df.where(pd.notna(df), None)
             stocks = df.to_dict(orient="records")
+    return stocks
 
-    stocks.sort(key=lambda s: (s.get("composite_score") or 0), reverse=True)
+
+def _aggregate_year_stocks(year: str):
+    """将一年内所有季度的打分取平均，返回聚合后的股票列表."""
+    year_dir_prefix = f"{year}-Q"
+    quarter_dirs = []
+    if os.path.exists(SCORES_DIR):
+        for d in sorted(os.listdir(SCORES_DIR)):
+            if d.startswith(year_dir_prefix):
+                quarter_dirs.append(d)
+
+    if not quarter_dirs:
+        return []
+
+    # 收集所有季度数据，按 ticker 聚合
+    ticker_data = {}  # ticker -> list of stock dicts
+    for q in quarter_dirs:
+        for s in _load_quarter_stocks(q):
+            t = s.get("ticker")
+            if t:
+                ticker_data.setdefault(t, []).append(s)
+
+    # 对每只股票取各季度平均
+    DIM_KEYS = ["business_quality", "financial_health", "growth", "management", "valuation"]
+    MASTER_KEYS = ["buffett", "munger", "duan", "lynch"]
+
+    aggregated = []
+    for ticker, entries in ticker_data.items():
+        n = len(entries)
+        latest = entries[-1]  # 取最新季度的 company_info 等元数据
+
+        def avg_field(field_path, entries):
+            vals = []
+            for e in entries:
+                v = e
+                for k in field_path:
+                    v = (v or {}).get(k) if isinstance(v, dict) else None
+                if v is not None:
+                    vals.append(v)
+            return sum(vals) / len(vals) if vals else None
+
+        agg = {
+            "ticker": ticker,
+            "quarter": year,
+            "composite_score": avg_field(["composite_score"], entries) or 0,
+            "veto_triggered": any(e.get("veto_triggered") for e in entries),
+            "veto_reasons": list({r for e in entries for r in (e.get("veto_reasons") or [])}),
+            "dimensions": {k: avg_field(["dimensions", k], entries) or 0 for k in DIM_KEYS},
+            "master_scores": {k: avg_field(["master_scores", k], entries) or 0 for k in MASTER_KEYS},
+            "company_info": latest.get("company_info", {}),
+            "key_metrics": latest.get("key_metrics", {}),
+            "data_quality_flags": latest.get("data_quality_flags", []),
+            "years_of_data": latest.get("years_of_data", 0),
+            "_quarters_included": [e.get("quarter") for e in entries],
+            "_quarter_scores": {
+                e.get("quarter"): e.get("composite_score") for e in entries
+            },
+            "_quarter_dimensions": {
+                e.get("quarter"): e.get("dimensions", {}) for e in entries
+            },
+            "_quarter_master_scores": {
+                e.get("quarter"): e.get("master_scores", {}) for e in entries
+            },
+        }
+        aggregated.append(agg)
+
+    aggregated.sort(key=lambda s: (s.get("composite_score") or 0), reverse=True)
+    return aggregated
+
+
+@app.route("/api/stocks")
+def list_stocks():
+    """返回某季度/年度所有股票的摘要（供侧边栏列表使用）.
+
+    参数:
+      quarter=2026-Q1  → 单季度
+      year=2026        → 年度聚合（所有季度平均）
+    """
+    year = request.args.get("year", "").strip()
+    quarter = _safe_quarter(request.args.get("quarter", ""))
+
+    if year:
+        stocks = _aggregate_year_stocks(year)
+    else:
+        stocks = _load_quarter_stocks(quarter)
+        stocks.sort(key=lambda s: (s.get("composite_score") or 0), reverse=True)
+
     return jsonify(stocks)
 
 
 @app.route("/api/stock/<ticker>")
 def get_stock(ticker: str):
-    """返回单只股票的完整数据，附带历史财务时序."""
-    quarter = _safe_quarter(request.args.get("quarter", ""))
-    json_path = os.path.join(SCORES_DIR, quarter, f"{ticker}.json")
-    if not os.path.exists(json_path):
-        return jsonify({"error": "Not found"}), 404
+    """返回单只股票的完整数据，附带历史财务时序.
 
-    with open(json_path, encoding="utf-8") as f:
-        data = json.load(f)
+    支持 ?quarter=2026-Q1（单季度）或 ?year=2026（年度聚合）。
+    """
+    year = request.args.get("year", "").strip()
+    quarter = _safe_quarter(request.args.get("quarter", ""))
+
+    if year:
+        # 年度模式：聚合该年所有季度的数据
+        stocks = _aggregate_year_stocks(year)
+        data = next((s for s in stocks if s["ticker"] == ticker), None)
+        if not data:
+            return jsonify({"error": "Not found"}), 404
+    else:
+        json_path = os.path.join(SCORES_DIR, quarter, f"{ticker}.json")
+        if not os.path.exists(json_path):
+            return jsonify({"error": "Not found"}), 404
+        with open(json_path, encoding="utf-8") as f:
+            data = json.load(f)
 
     # 附加历史财务数据（图表用）
     fin = _build_financials(ticker)
