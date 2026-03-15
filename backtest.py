@@ -15,6 +15,8 @@
   python backtest.py --list
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -22,6 +24,7 @@ import sys
 from bisect import bisect_left
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Optional
 
 # ── 可选依赖（scipy/pandas），未安装时降级到纯 Python 实现 ──────────────
 try:
@@ -77,7 +80,7 @@ def list_scored_quarters() -> list[str]:
 
 def load_quarter_scores(
     quarter: str, score_key: str,
-    top_n: int | None = None,
+    top_n: Optional[int] = None,
     include_veto: bool = False,
 ) -> list[dict]:
     """
@@ -150,7 +153,7 @@ def build_price_index(price_history: list[dict]) -> tuple[list[str], list[float]
 
 
 def find_price_at(dates: list[str], prices: list[float], target: date,
-                  tolerance_days: int = 10) -> float | None:
+                  tolerance_days: int = 10) -> Optional[float]:
     """
     在有序价格序列中，找最近交易日的价格（±10个交易日内）。
     使用二分查找，优先找 target 当日或之后最近的交易日。
@@ -176,7 +179,7 @@ def compute_forward_return(
     start: date,
     end: date,
     fetcher: DataFetcher,
-) -> float | None:
+) -> Optional[float]:
     """
     计算 start → end 期间股价涨幅（已复权）。
     返回 None 表示数据不足或无法获取。
@@ -398,8 +401,8 @@ def run_backtest(
     quarter: str,
     forward_years: int,
     score_key: str,
-    top_n: int | None,
-    end_date_override: date | None = None,
+    top_n: Optional[int],
+    end_date_override: Optional[date] = None,
     verbose: bool = True,
     include_veto: bool = False,
 ) -> dict:
