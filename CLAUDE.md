@@ -32,8 +32,16 @@ stock_scoring_agent/
 │   ├── _summary.csv       # 全量汇总表
 │   └── _run_log.txt       # 运行日志
 ├── dashboard.py           # 可视化看板 Flask 服务（python dashboard.py → http://localhost:5001）
+├── backtest.py            # 打分回测验证：比较历史打分排名与未来实际涨幅排名
 ├── templates/
 │   └── index.html         # 看板前端（Bootstrap + Chart.js，支持明亮/夜间模式）
+├── scores/{quarter}/
+│   ├── {TICKER}.json      # 单股详细打分
+│   ├── _summary.csv       # 全量汇总表
+│   ├── _run_log.txt       # 运行日志
+│   └── backtest/          # 回测输出目录
+│       ├── backtest_{quarter}_{score_key}_{N}y.csv      # 逐股明细
+│       └── backtest_{quarter}_{score_key}_{N}y_report.txt  # 文本报告
 ├── tests/
 │   └── test_fetch.py      # 数据拉取测试（python tests/test_fetch.py AAPL MSFT）
 └── .env                   # FMP_API_KEY（不提交到 git）
@@ -93,6 +101,25 @@ python dashboard.py
 # 浏览器自动打开 http://localhost:5001
 # 功能：侧边栏股票列表 + 详情页（雷达图/营收/利润率/ROE/EPS 等 6 张图表）
 # 支持明亮/夜间模式切换，偏好存入 localStorage
+
+# ── 打分回测验证（backtest.py）───────────────────────────
+# 列出所有可回测的季度
+python backtest.py --list
+
+# 基础回测：2023-Q1 打分 vs 未来3年实际涨幅
+python backtest.py --quarter 2023-Q1 --forward-years 3
+
+# 验证某一大师维度的预测能力
+python backtest.py --quarter 2023-Q1 --score-key buffett --forward-years 3
+
+# 对比所有打分维度，看哪个维度 IC 最高
+python backtest.py --quarter 2023-Q1 --all-keys
+
+# 验证否决规则（被否决股票是否真的跑输）
+python backtest.py --quarter 2023-Q1 --include-veto
+
+# 只看 Top N 高分股的区分度
+python backtest.py --quarter 2023-Q1 --top-n 100 --forward-years 1
 ```
 
 ---
@@ -246,13 +273,61 @@ python dashboard.py
 
 ---
 
+## 打分回测验证（backtest.py）
+
+### 核心逻辑
+
+```
+历史打分（某季度末）
+  ↓ 以季度末股价为起点
+  ↓ 以 N 年后股价为终点（若超过今天则截止到今天）
+  ↓ 计算每只股票实际涨幅
+预测排名（打分高低）vs 实际排名（涨幅高低）
+  ↓ 输出 IC / 命中率 / 五分位组收益
+```
+
+### 评估指标
+
+| 指标 | 说明 | 有效阈值 |
+|------|------|---------|
+| **IC（Spearman 秩相关）** | 预测排名与实际涨幅排名的相关性 | > 0.03 认为有效 |
+| **命中率** | 高分股跑赢低分股的概率 | > 50% 优于随机 |
+| **五分位组收益** | Q1（高分）到 Q5（低分）各组平均涨幅 | Q1 > Q5 说明区分度好 |
+| **Q1-Q5 年化超额** | 高低分位收益差 / 前瞻年数 | 正值且显著为佳 |
+
+### 命令行参数
+
+| 参数 | 默认值 | 说明 |
+|------|-------|------|
+| `--quarter` | 最新季度 | 回测哪个季度的打分 |
+| `--forward-years` | 3 | 前瞻期（年），支持小数如 1.5 |
+| `--score-key` | composite_score | 排名依据：composite_score / buffett / munger / duan / lynch |
+| `--top-n` | 全部 | 只取高分前 N 只 |
+| `--all-keys` | — | 对所有打分维度逐一回测并汇总对比 |
+| `--include-veto` | — | 包含被否决股票（验证否决规则有效性） |
+| `--end-date` | — | 手动指定终止日期（YYYY-MM-DD） |
+| `--no-save` | — | 不保存报告文件 |
+
+### 输出文件
+
+结果保存在 `scores/{quarter}/backtest/`：
+- `backtest_{tag}.csv` — 逐股明细（predicted_rank / actual_rank / forward_return_pct 等）
+- `backtest_{tag}_report.txt` — 文字报告（IC / 命中率 / 五分位表 / Top20 列表）
+
+### 前提条件
+
+需要历史价格数据（`price_daily:{ticker}` 缓存 TTL 7 天）。
+建议先运行 `fetch_data.py` 将价格写入缓存，回测时不发出额外网络请求。
+
+---
+
 ## 开发路线图
 
-- **V1（当前）**: 跑通打分流水线 ✓
-- **V1.5（当前）**: 可视化看板 ✓（Flask + Chart.js，明亮/夜间模式）
-- **V2**: 离线回测（IC值、分组分析、Point-in-Time）
+- **V1（完成）**: 跑通打分流水线 ✓
+- **V1.5（完成）**: 可视化看板 ✓（Flask + Chart.js，明亮/夜间模式）
+- **V2（完成）**: 打分回测验证 ✓（IC / 五分位 / 命中率，backtest.py）
 - **V3**: LLM 读 10-K 做定性分析
-- **V4**: 权重自动优化
+- **V4**: 权重自动优化（基于回测 IC 反向调参）
 
 ---
 
@@ -265,3 +340,5 @@ python dashboard.py
 5. **`stable/search-symbol`** 是当前唯一可用的股票搜索端点，已缓存 A 股列表（key: `a_stocks:list`）。
 6. **拉取与打分分离**：推荐先用 `fetch_data.py` 把数据拉进缓存，再跑 `run_scoring.py`。打分时若数据已在缓存则不会发出任何网络请求。
 7. **cache_key 格式**：`{type}:{TICKER}`，如 `income_annual:AAPL`、`ratios_ttm:AAPL`。每个端点对应固定 key，见 `fetch_data.py` 中的 `_CACHE_KEY_PREFIX`。
+8. **回测的 Point-in-Time 问题**：`backtest.py` 直接用打分 JSON 中的分数，不重新计算，天然避免未来数据泄漏。但股价涨幅以季度末收盘价为起点，需确保 `price_daily` 缓存覆盖该日期。
+9. **回测有效性条件**：至少需要 5 只股票有完整价格数据才计算 IC；五分位分析至少需要 5 只（每组 1 只）。样本太少时指标不具统计意义。
