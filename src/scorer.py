@@ -116,7 +116,10 @@ class FilterFunnel:
                 # 退市过滤（零额外 API 调用，profile 已在此获取）：
                 #   1. isActivelyTrading = False — 官方退市标记
                 #   2. price = 0               — 没有报价，实质停止交易
-                if not profile.get("isActivelyTrading", True):
+                # 注意：不用 `not profile.get("isActivelyTrading", True)`，
+                # 当字段值为 null（Python None）时，not None = True 会误杀正常股票。
+                is_active = profile.get("isActivelyTrading")
+                if is_active is not None and not bool(is_active):
                     continue
                 price = float(profile.get("price") or 0)
                 if price == 0:

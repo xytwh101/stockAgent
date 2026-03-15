@@ -112,7 +112,10 @@ def score_ticker(
 
         # 2. 退市 / 实质停止交易过滤（raw 中已含 profile 和 income_annual，零额外调用）
         profile = raw.get("profile", {})
-        if not profile.get("isActivelyTrading", True):
+        # 注意：不能用 `not profile.get("isActivelyTrading", True)`——
+        # 当字段存在但值为 null（Python None）时，not None = True 会误杀正常股票。
+        is_active = profile.get("isActivelyTrading")
+        if is_active is not None and not bool(is_active):
             print(f"  [跳过] {ticker}: 已退市 (isActivelyTrading=False)")
             return None
         if float(profile.get("price") or 0) == 0:
@@ -156,7 +159,7 @@ def score_ticker(
         all_vetoes = global_vetoes + master_vetoes
         veto_triggered = len(all_vetoes) > 0
 
-        # 6. 综合得分（默认权重加权）
+        # 8. 综合得分（默认权重加权）
         from config import DIMENSION_WEIGHTS
         composite = sum(
             DIMENSION_WEIGHTS[dim] * dim_scores.get(dim, 0)
