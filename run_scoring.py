@@ -369,7 +369,13 @@ def write_summary_csv(results: list[dict], out_dir: str):
             }
             writer.writerow(row)
 
+    # 同时写一份固定名称的 _summary.csv，供 dashboard 识别季度
+    stable_path = os.path.join(out_dir, "_summary.csv")
+    import shutil
+    shutil.copy2(path, stable_path)
+
     print(f"[输出] 汇总表已写入: {path}")
+    print(f"[输出] 看板汇总表: {stable_path}")
 
 
 # ─────────────────────────────────────────────
